@@ -42,12 +42,12 @@ window.onerror = function (msg, src, line) {
     </div>
     <div class="view" id="viewUnit">
       <div class="unitnav" id="unitNav"></div>
-      <div class="scroll" id="unitScroll"><svg id="unitSvg" class="nowires" viewBox="0 0 1100 1660" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Boiler control panel with probe points"></svg></div>
-      <div class="legend"><span><i style="background:var(--red)"></i>Red probe</span><span><i style="background:#fff"></i>Black probe</span><span><i style="background:#e8a33b"></i>Hot side (L1 and switched)</span><span><i style="background:#d0d6dc"></i>Neutral</span><span>Click a terminal to probe.</span></div>
+      <div class="scroll" id="unitScroll"><svg id="unitSvg" class="nowires" viewBox="0 0 1120 2110" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Boiler control panel with probe points"></svg></div>
+      <div class="legend"><span><i style="background:var(--red)"></i>Red probe</span><span><i style="background:#fff"></i>Black probe</span><span><i style="background:#e8a33b"></i>Leg L1</span><span><i style="background:#b48cff"></i>Leg L2</span><span><i style="background:#4ac9c0"></i>Leg L3</span><span><i style="background:#e5483b"></i>120 V control hot</span><span><i style="background:#4aa3df"></i>Neutral (X2)</span><span>Click a terminal to probe.</span></div>
     </div>
     <div class="view" id="viewSchem" hidden>
-      <div class="scroll" style="flex:1;min-height:0;overflow:auto"><svg id="schemSvg" class="sch" viewBox="0 0 900 1060" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Ladder schematic of the boiler controls"></svg></div>
-      <div class="legend"><span>All control circuits are 120 V. Left rail: L1 after fuse F1. Right rail: neutral. Numbers on the right are line numbers.</span></div>
+      <div class="scroll" style="flex:1;min-height:0;overflow:auto"><svg id="schemSvg" class="sch" viewBox="0 0 900 1390" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Ladder schematic of the boiler controls"></svg></div>
+      <div class="legend"><span>Top: 208 V 3-phase power. Below: 120 V control from the control transformer (left rail X1 after FU4, right rail X2). Numbers on the right are line numbers.</span></div>
     </div>
     <div class="view" id="viewPic" hidden><div class="scroll"><svg id="picSvg" viewBox="0 0 1100 760" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Boiler room with burner, gas train, pump and piping"></svg>
       <div id="picPanel"><div class="pc" id="picSel"><h3>Look closely</h3><p class="dim">Click any part of the boiler room to inspect it.</p></div></div></div></div>
@@ -85,7 +85,7 @@ window.onerror = function (msg, src, line) {
     </div>
     <div class="card" id="cardClamp">
       <h2>Clamp meter &amp; gauges</h2>
-      <div class="row" style="margin-bottom:6px"><select id="clampSel" aria-label="Clamp location"><option value="pump">Pump motor lead</option><option value="blower">Blower motor lead</option><option value="ign">Ignition transformer lead</option><option value="line">Main line (L1)</option></select><button class="btn" id="clampBtn" type="button">Clamp</button></div>
+      <div class="row" style="margin-bottom:6px"><select id="clampSel" aria-label="Clamp location"><option value="pump1">Pump motor lead T1</option><option value="pump2">Pump motor lead T2</option><option value="pump3">Pump motor lead T3</option><option value="blower1">Blower motor lead T1</option><option value="blower2">Blower motor lead T2</option><option value="blower3">Blower motor lead T3</option><option value="ign">Ignition transformer lead</option><option value="x1">Control transformer X1</option><option value="line">Main line L1</option></select><button class="btn" id="clampBtn" type="button">Clamp</button></div>
       <div class="row" style="margin-bottom:10px;font-family:var(--mono)">Amps: <b id="clampOut">---</b></div>
       <div class="row" style="margin-bottom:6px"><select id="manoSel" aria-label="Manometer port"><option value="inlet">Manometer: gas inlet port</option><option value="manifold">Manometer: manifold port (after V2)</option><option value="pilot">Manometer: pilot test port</option><option value="air">Manometer: blower static (air switch port)</option></select><button class="btn" id="manoBtn" type="button">Read</button></div>
       <div class="row" style="margin-bottom:10px;font-family:var(--mono)">Pressure: <b id="manoOut">---</b></div>

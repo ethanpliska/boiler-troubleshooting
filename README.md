@@ -1,7 +1,7 @@
 # Boiler Troubleshooting
 
 An offline training game for HVAC technicians: troubleshoot a commercial hot-water boiler with a power burner and a
-7800-series flame safeguard. Twenty service calls cover electrical controls, the water side and combustion.
+7800-series flame safeguard. The boiler runs on 208 V 3-phase with a 120 V control circuit. Twenty-two service calls cover electrical controls, the water side and combustion.
 
 Play: open `index.html` (or `boiler-troubleshooting.html`, the same file) in any browser. No internet needed.
 

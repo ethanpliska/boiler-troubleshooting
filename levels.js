@@ -1,17 +1,15 @@
-/* ===== Twenty service calls, from the basics to compound faults. Tickets are in the customer's words and never name the part.
+/* ===== Twenty-two service calls, from the basics to compound faults. Tickets are in the customer's words and never name the part.
    cust: answers to the questions in "Talk to the customer". pre: seconds the boiler ran before you arrived. resets: times the
    customer already pushed the reset button. ===== */
-const RANKS = ['Apprentice', 'Apprentice', 'Apprentice', 'Apprentice', 'Apprentice', 'Journeyman', 'Journeyman', 'Journeyman', 'Journeyman', 'Journeyman',
-  'Journeyman', 'Journeyman', 'Journeyman', 'Journeyman', 'Senior tech', 'Senior tech', 'Senior tech', 'Senior tech', 'Senior tech', 'Senior tech'];
 const LEVELS = [
   { id: 1, title: 'Dead quiet', site: 'Bldg 114, Motor Pool office', faults: ['fuse_open'], par: 6,
     ticket: 'Nothing is running in the boiler room. No lights on the boiler, no hum, nothing. The offices are getting cold.',
     cust: { when: 'Sometime overnight. It was fine at close of business.', work: 'Nobody has touched it in months.', lights: 'No lights at all on the burner panel. Usually there is a green one.', noise: 'It is completely silent in there.' },
     hints: ['Start at the disconnect. Is there 120 V on the line side and the load side?', 'Follow L1 into the panel. Read across the control fuse with the power on.', 'Voltage across a fuse with the power on means the fuse is open. Confirm with ohms, power off.'] },
-  { id: 2, title: 'Pump will not start', site: 'Bldg 207, Dental Clinic', faults: ['pr_coil'], par: 8,
+  { id: 2, title: 'Pump will not start', site: 'Bldg 207, Dental Clinic', faults: ['ps_coil'], par: 8,
     ticket: 'The boiler is not firing and the pipes in the mechanical room are cold. The building controls show heat is on.',
     cust: { when: 'This morning. The front desk noticed the cold first.', work: 'No work done.', lights: 'The burner display just says STANDBY.', noise: 'Very quiet. Usually you can hear the pump.' },
-    hints: ['The burner waits for the flow switch, and the flow switch waits for the pump. Is the pump running?', 'Check for 120 V across the pump relay coil, then across its contacts.', 'Coil has 120 V across it but the contacts never close: ohm the coil with the power off.'] },
+    hints: ['The burner waits for the flow switch, and the flow switch waits for the pump. Is the pump running?', 'Check for 120 V across the pump starter coil (A to B), then 208 V on its line and load sides.', 'Coil has 120 V across it but the starter never pulls in: ohm the coil with the power off.'] },
   { id: 3, title: 'Pump runs, burner waits', site: 'Bldg 31, Chapel annex', faults: ['oc_bad'], par: 8,
     ticket: 'The pump is running but the boiler never lights. The water gauge says it is barely warm.',
     cust: { when: 'Two days ago it started taking longer to warm up, then today it just stopped heating.', work: 'Nobody has been in there.', lights: 'The screen on the burner says STANDBY.', noise: 'Just the pump.' },
@@ -39,7 +37,11 @@ const LEVELS = [
   { id: 9, title: 'Hot smell from the burner', site: 'Bldg 405, Clinic', faults: ['blower_open'], par: 9, resets: 1,
     ticket: 'There was a hot electrical smell near the burner and now it has an alarm light. We did not touch anything else.',
     cust: { when: 'Around noon.', work: 'No work done.', lights: 'Red alarm light.', noise: 'It was humming loud before it quit. Now it is quiet.' },
-    hints: ['During prepurge, is the blower turning?', 'Read terminal 3 to neutral, then across the blower motor leads.', 'Voltage is there and the motor does not run: ohm the motor, power off.'] },
+    hints: ['During prepurge, is the blower turning? Listen to it.', 'With M1 pulled in, read 208 V across each pair of blower motor leads (T1-T2, T2-T3, T3-T1).', 'All three legs are there and the motor only hums: ohm each pair of windings with the power off. They should all match.'] },
+  { id: 21, title: 'Fan never comes on', site: 'Bldg 66, Vehicle maintenance', faults: ['m1_coil'], par: 9, resets: 1,
+    ticket: 'The boiler clicks, waits a bit and then the red alarm light comes on. We never hear the burner fan.',
+    cust: { when: 'This morning.', work: 'No.', lights: 'Red alarm light. The screen says lockout, something about interlock.', noise: 'A click from the panel, then nothing. No fan.' },
+    hints: ['During prepurge the relay module sends 120 V out of terminal 3 to start the blower. Does it get there?', 'Read across the M1 coil, A to B, during prepurge. Does the contactor pull in?', '120 V on the coil and the contactor never pulls in: ohm the coil with the power off.'] },
   { id: 10, title: 'Pilot lights, main does not', site: 'Bldg 77, Dining facility', faults: ['v1_open'], par: 10, resets: 1,
     ticket: 'The boiler lights a little flame, then shuts down with an alarm. The kitchen needs hot water for the noon meal.',
     cust: { when: 'Since breakfast.', work: 'No.', lights: 'Red alarm. Something about main flame.', noise: 'A puff of a start, then it goes off.' },
@@ -52,6 +54,10 @@ const LEVELS = [
     ticket: 'The boiler says low water, but the pressure gauge looks normal. We added water anyway and nothing changed.',
     cust: { when: 'Yesterday.', work: 'We opened the water feed for a minute. The gauge went a little higher.', lights: 'LOW WATER light on.', noise: 'Pump runs. Burner never starts.' },
     hints: ['Is the boiler really low? Check the pressure gauge against the cold fill pressure.', 'Measure across the low-water cutoff contacts.', 'A probe senses water by conducting through it. What happens when it is coated?'] },
+  { id: 22, title: 'Pump keeps tripping', site: 'Bldg 12, Transportation office', faults: ['fuse_L3'], par: 10, pre: 200,
+    ticket: 'The pump stopped and there is no heat. Our maintenance guy pushed a reset button on the pump starter and it hummed and stopped again.',
+    cust: { when: 'After a thunderstorm last night.', work: 'Our maintenance guy pushed the reset on the pump starter this morning.', lights: 'Screen says STANDBY.', noise: 'When he reset it the pump just hummed loud for a few seconds, then clicked off.' },
+    hints: ['A 3-phase motor that hums and will not turn is usually missing a leg. Check all three legs.', 'Read L1-L2, L2-L3 and L3-L1 at the line side of the disconnect, then after each fuse.', 'One leg reads about half voltage after its fuse: that is back-feed through the motor windings, not real power. Ohm the fuse with the power off. Then reset the overload.'] },
   { id: 13, title: 'Pump hums along, no heat', site: 'Bldg 115, Training center', faults: ['coupler'], par: 9,
     ticket: 'We hear the pump motor running, but the boiler will not fire and the building is cold.',
     cust: { when: 'This morning after the weekend.', work: 'No.', lights: 'Screen says STANDBY.', noise: 'The pump sounds louder than normal. Kind of a rattle.' },
@@ -85,4 +91,4 @@ const LEVELS = [
     cust: { when: 'The noise started this morning.', work: 'Another contractor came out last night. He said he got it running and would come back for parts.', lights: 'There is a LOW WATER light on, but the boiler is running anyway.', noise: 'Banging and rumbling like a kettle.' },
     hints: ['The LOW WATER light is on but the burner runs. How can that be?', 'Look at the low-water cutoff terminals in the cabinet.', 'Never leave a safety jumped. Fix the reason it tripped, then remove the jumper.'] }
 ];
-LEVELS.forEach((l, i) => { l.rank = RANKS[i]; l.n = i + 1; });
+LEVELS.forEach((l, i) => { l.n = i + 1; l.rank = l.n <= 5 ? 'Apprentice' : l.n <= 15 ? 'Journeyman' : 'Senior tech'; });

@@ -1,21 +1,33 @@
 /* ---- engine.js ---- */
-/* ===== Hot-water boiler simulation: 120 V control circuit, 7800-series flame safeguard (on/off burner),
-   water side (pump, flow, pressure, expansion tank, relief valve) and combustion (gas pressures, air, flue gas).
+/* ===== Hot-water boiler simulation: 208 V 3-phase power (blower and pump motors), 120 V control circuit from a control
+   transformer, 7800-series flame safeguard (on/off burner), water side (pump, flow, pressure, expansion tank, relief valve)
+   and combustion (gas pressures, air, flue gas).
    Written in plain ES2017 on purpose: the classroom smartboard browser is old. ===== */
 
 const SPEED = 2;            /* flame safeguard timers run at twice real time so a full start takes about 40 s, not 80 s */
 const FLAME_MIN = 1.25;     /* flame signal (V dc at the test jacks) needed to prove flame */
 const OC_SET = 180, OC_DIFF = 15, HL_SET = 210;   /* operating aquastat opens at 180 and closes at 165; manual reset high limit 210 */
+const XF_RATIO = 120 / 208; /* control transformer 208 V primary, 120 V secondary */
 
 /* every probe point on the panel, in the words a tech would use */
 const NODES = {
-  LN_L1: 'Disconnect, line side L1 (always live)', LN_N: 'Disconnect, line side neutral',
-  DS_L1: 'Disconnect, load side L1', F1_IN: 'Control fuse F1, in', F1_OUT: 'Control fuse F1, out (L1 bus)',
-  NB: 'Neutral bar', GND: 'Ground lug (bare metal)',
+  LN_L1: 'Disconnect, line side L1 (always live)', LN_L2: 'Disconnect, line side L2 (always live)', LN_L3: 'Disconnect, line side L3 (always live)',
+  F1_IN: 'Disconnect fuse F1, in', F2_IN: 'Disconnect fuse F2, in', F3_IN: 'Disconnect fuse F3, in',
+  F1_OUT: 'Disconnect fuse F1, out', F2_OUT: 'Disconnect fuse F2, out', F3_OUT: 'Disconnect fuse F3, out',
+  XF_H1: 'Control transformer H1 (208 V primary)', XF_H2: 'Control transformer H2 (208 V primary)',
+  XF_X1: 'Control transformer X1 (120 V secondary)', XF_X2: 'Control transformer X2 (secondary, grounded)',
+  FU_IN: 'Control fuse FU4, in', FU_OUT: 'Control fuse FU4, out (120 V bus)',
+  NB: 'Neutral bar (X2)', GND: 'Ground lug (bare metal)',
+  M1_L1: 'Blower contactor M1 L1 (line)', M1_L2: 'Blower contactor M1 L2 (line)', M1_L3: 'Blower contactor M1 L3 (line)',
+  M1_T1: 'Blower contactor M1 T1 (load)', M1_T2: 'Blower contactor M1 T2 (load)', M1_T3: 'Blower contactor M1 T3 (load)',
+  M1_A: 'Blower contactor M1 coil A (from RM 3)', M1_B: 'Blower contactor M1 coil B (neutral)',
+  BM_T1: 'Blower motor T1', BM_T2: 'Blower motor T2', BM_T3: 'Blower motor T3',
+  PS_L1: 'Pump starter L1 (line)', PS_L2: 'Pump starter L2 (line)', PS_L3: 'Pump starter L3 (line)',
+  PS_T1: 'Pump starter T1 (to motor)', PS_T2: 'Pump starter T2 (to motor)', PS_T3: 'Pump starter T3 (to motor)',
+  PS_A: 'Pump starter coil A', PS_B: 'Pump starter coil B (neutral)',
+  OL_95: 'Pump overload contact 95 (NC, in)', OL_96: 'Pump overload contact 96 (NC, out to coil)',
+  PM_T1: 'Pump motor T1', PM_T2: 'Pump motor T2', PM_T3: 'Pump motor T3',
   EN_1: 'Heating call contact (building controls), in', EN_2: 'Heating call contact (building controls), out',
-  PR_A: 'Pump relay PR coil, terminal A', PR_B: 'Pump relay PR coil, terminal B (neutral)',
-  PR_C: 'Pump relay PR contact, common (L1 bus)', PR_NO: 'Pump relay PR contact, normally open (to pump)',
-  PM_1: 'Pump motor lead 1 (from PR)', PM_2: 'Pump motor lead 2 (neutral)',
   BS_1: 'Burner switch, in', BS_2: 'Burner switch, out',
   OC_1: 'Operating aquastat, in', OC_2: 'Operating aquastat, out',
   HL_1: 'High limit (manual reset), in', HL_2: 'High limit (manual reset), out',
@@ -25,11 +37,10 @@ const NODES = {
   HG_1: 'High gas pressure switch, in', HG_2: 'High gas pressure switch, out',
   AP_1: 'Air proving switch, common', AP_2: 'Air proving switch, normally open (to RM terminal 7)',
   RM_L1: 'Relay module L1 (power in)', RM_L2: 'Relay module L2 (neutral)',
-  RM_3: 'Relay module 3 (blower motor out)', RM_4: 'Relay module 4 (alarm out)',
+  RM_3: 'Relay module 3 (blower contactor out)', RM_4: 'Relay module 4 (alarm out)',
   RM_6: 'Relay module 6 (limits and operating control in)', RM_7: 'Relay module 7 (lockout interlock in)',
   RM_8: 'Relay module 8 (pilot valve out)', RM_9: 'Relay module 9 (main valves out)', RM_10: 'Relay module 10 (ignition out)',
   FT_P: 'Flame signal test jack + (V dc)', FT_N: 'Flame signal test jack − (common)',
-  BM_1: 'Blower motor lead 1 (from RM 3)', BM_2: 'Blower motor lead 2 (neutral)',
   AL_1: 'Alarm light, from RM 4', AL_2: 'Alarm light, neutral',
   PV_1: 'Pilot valve coil, from RM 8', PV_2: 'Pilot valve coil, neutral',
   V1_1: 'Main valve V1 coil, from RM 9', V1_2: 'Main valve V1 coil, neutral',
@@ -39,16 +50,19 @@ const NODES = {
 
 /* points joined by wire (one list per wire run) */
 const NETS = [
-  ['LN_L1'], ['DS_L1', 'F1_IN'], ['F1_OUT', 'EN_1', 'PR_C', 'RM_L1'], ['EN_2', 'PR_A', 'BS_1'], ['PR_NO', 'PM_1'],
+  ['LN_L1'], ['LN_L2'], ['LN_L3'], ['F1_IN'], ['F2_IN'], ['F3_IN'],
+  ['F1_OUT', 'XF_H1', 'M1_L1', 'PS_L1'], ['F2_OUT', 'XF_H2', 'M1_L2', 'PS_L2'], ['F3_OUT', 'M1_L3', 'PS_L3'],
+  ['M1_T1', 'BM_T1'], ['M1_T2', 'BM_T2'], ['M1_T3', 'BM_T3'], ['PS_T1', 'PM_T1'], ['PS_T2', 'PM_T2'], ['PS_T3', 'PM_T3'],
+  ['XF_X1', 'FU_IN'], ['FU_OUT', 'EN_1', 'RM_L1'], ['EN_2', 'OL_95', 'BS_1'], ['OL_96', 'PS_A'],
   ['BS_2', 'OC_1'], ['OC_2', 'HL_1'], ['HL_2', 'LW_1'], ['LW_2', 'FS_1'], ['FS_2', 'RM_6', 'LG_1'], ['LG_2', 'HG_1'], ['HG_2', 'AP_1'], ['AP_2', 'RM_7'],
-  ['RM_3', 'BM_1'], ['RM_4', 'AL_1'], ['RM_8', 'PV_1'], ['RM_9', 'V1_1', 'V2_1'], ['RM_10', 'IG_1'],
-  ['LN_N', 'NB', 'GND', 'PR_B', 'PM_2', 'RM_L2', 'BM_2', 'AL_2', 'PV_2', 'V1_2', 'V2_2', 'IG_2'],
+  ['RM_3', 'M1_A'], ['RM_4', 'AL_1'], ['RM_8', 'PV_1'], ['RM_9', 'V1_1', 'V2_1'], ['RM_10', 'IG_1'],
+  ['XF_X2', 'NB', 'GND', 'PS_B', 'M1_B', 'RM_L2', 'AL_2', 'PV_2', 'V1_2', 'V2_2', 'IG_2'],
   ['FT_P'], ['FT_N']
 ];
 const NET_OF = {};
 NETS.forEach((n, i) => n.forEach(x => { NET_OF[x] = i; }));
 
-/* ---------- a small resistor-network solver: voltages with the power on, ohms with it off ---------- */
+/* ---------- a small resistor-network solver: AC voltages (as phasors) with the power on, ohms with it off ---------- */
 function netGroups(els) {
   const par = NETS.map((n, i) => i);
   const find = x => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
@@ -72,7 +86,8 @@ function component(start, res) {
   while (q.length) { const x = q.pop(); res.forEach(e => { const o = e[0] === x ? e[1] : e[1] === x ? e[0] : null; if (o !== null && !seen.has(o)) { seen.add(o); q.push(o); } }); }
   return seen;
 }
-/* potentials (V) of every wire run; fixed = {groupNode: volts}; anything not tied to a source floats (null) */
+/* potentials of every wire run as [re, im] phasors; fixed = {node: [re, im]}; anything not tied to a source floats (null).
+   Everything is resistive, so the real and imaginary parts solve separately with the same matrix. */
 function solveVolts(els, fixed) {
   const G = netGroups(els), V = {}, fixedG = {};
   Object.keys(fixed).forEach(id => { fixedG[G.g[NET_OF[id]]] = fixed[id]; });
@@ -80,17 +95,19 @@ function solveVolts(els, fixed) {
   Object.keys(fixedG).forEach(k => component(+k, G.res).forEach(x => reach.add(x)));
   const unk = [...reach].filter(x => fixedG[x] === undefined), idx = {};
   unk.forEach((x, i) => { idx[x] = i; });
-  const A = unk.map(() => unk.map(() => 0)), b = unk.map(() => 0);
+  const mk = () => unk.map(() => unk.map(() => 0));
+  const A = mk(), br = unk.map(() => 0), bi = unk.map(() => 0);
   G.res.forEach(e => {
     const c = 1 / e[2];
     [[e[0], e[1]], [e[1], e[0]]].forEach(p => {
       const i = idx[p[0]]; if (i === undefined) return;
       A[i][i] += c;
-      if (idx[p[1]] !== undefined) A[i][idx[p[1]]] -= c; else if (fixedG[p[1]] !== undefined) b[i] += c * fixedG[p[1]];
+      if (idx[p[1]] !== undefined) A[i][idx[p[1]]] -= c; else if (fixedG[p[1]] !== undefined) { br[i] += c * fixedG[p[1]][0]; bi[i] += c * fixedG[p[1]][1]; }
     });
   });
-  const sol = unk.length ? gauss(A, b) : [];
-  NETS.forEach((n, i) => { const g = G.g[i]; V[i] = fixedG[g] !== undefined ? fixedG[g] : idx[g] !== undefined ? sol[idx[g]] : null; });
+  const A2 = A.map(r => r.slice());
+  const sr = unk.length ? gauss(A, br) : [], si = unk.length ? gauss(A2, bi) : [];
+  NETS.forEach((n, i) => { const g = G.g[i]; V[i] = fixedG[g] !== undefined ? fixedG[g] : idx[g] !== undefined ? [sr[idx[g]], si[idx[g]]] : null; });
   return V;
 }
 function solveOhms(els, a, b) {
@@ -106,6 +123,7 @@ function solveOhms(els, a, b) {
   bb[idx[ga]] = 1;
   return gauss(A, bb)[idx[ga]];
 }
+const phasor = (mag, deg) => [mag * Math.cos(deg * Math.PI / 180), mag * Math.sin(deg * Math.PI / 180)];
 
 /* ---------- the boiler ---------- */
 const RM_TEXT = { OFF: 'NO POWER', INIT: 'INITIATE', STANDBY: 'STANDBY', PURGE: 'PREPURGE', PFEP: 'PILOT IGN (PFEP)', MFEP: 'MAIN IGN (MFEP)', RUN: 'RUN', POST: 'POSTPURGE', LOCKOUT: 'LOCKOUT', HOLD: 'STANDBY HOLD' };
@@ -115,7 +133,7 @@ const Boiler = {
   faults: new Set(), disc: true, call: true, burnerSw: true,
   rm: null, Tb: 140, ocOpen: false, hlTrip: false, lgTrip: false, hgTrip: false, lockedOnce: false,
   pilot: false, main: false, spark: false, sig: 0, air: 0, flow: 0, dp: 0, pin: 7.2, man: 0, pilotP: 0,
-  pumpRun: false, blowerRun: false, P: 18, relief: 'dry', time: 0, seed: 1, quiet: false, V: {}, en: {}, onLog: null, resetsSinceFix: 0,
+  pumpRun: false, blowerRun: false, pumpHum: false, blowerHum: false, olTrip: false, humT: 0, P: 18, relief: 'dry', time: 0, seed: 1, quiet: false, V: {}, en: {}, onLog: null, resetsSinceFix: 0,
 
   has(f) { return this.faults.has(f); },
   reset(faults, seed, opt) {
@@ -125,8 +143,8 @@ const Boiler = {
     this.rm = { st: 'OFF', t: 0, el: 0, ilk: false, hold: 0, hist: [], lock: '', runT: 0, lowSig: 0 };
     this.Tb = opt.Tb != null ? opt.Tb : 138 + (seed % 5) * 2; this.ocOpen = false; this.hlTrip = false; this.lgTrip = false; this.hgTrip = false;
     this.pilot = false; this.main = false; this.spark = false; this.sig = 0; this.air = 0; this.flow = 0; this.dp = 0;
-    this.pumpRun = false; this.blowerRun = false; this.time = 0; this.resetsSinceFix = 0; this.en = {};
-    this.line = 119 + (seed % 4) * 0.8;
+    this.pumpRun = false; this.blowerRun = false; this.pumpHum = false; this.blowerHum = false; this.olTrip = false; this.humT = 0; this.time = 0; this.resetsSinceFix = 0; this.en = {};
+    this.line = 205 + (seed % 4) * 1.3;
     /* the boiler ran (or tried to) before the tech got there: play that out so the job is found as the customer left it */
     this.quiet = true;
     const pre = opt.pre != null ? opt.pre : 260;
@@ -142,28 +160,53 @@ const Boiler = {
   lwClosed() { if (this.has('jmp_lwco')) return true; return !this.has('lwco_dirty') && !this.lowWater(); },
   fsClosed() { return !this.has('fs_bad') && this.flow >= 20; },
   apClosed() { if (this.has('aps_weld')) return true; return !this.has('aps_bad') && !this.has('aps_tube') && this.air >= 0.5; },
-  rmPowered() { return this.rmOK() && this.vAt('RM_L1') > 90; },
+  rmPowered() { return this.rmOK() && this.mag('RM_L1') > 90; },
   rmOK() { return !this.has('rm_bad'); },
   out(n) { const r = this.rm; return !!(r && this.rmOK() && this.lastPow && RM_OUT[n].indexOf(r.st) >= 0); },
 
   elements() {
-    const f = this.faults, O = Infinity, sw = on => on ? 0 : O;
+    const f = this.faults, O = Infinity, sw = on => on ? 0 : O, en = this.en;
+    const leg = k => f.has('fuse_L' + k) ? O : 0;
+    const m1 = k => sw(en.m1 && !(k === 3 && f.has('m1_pole')));
     return [
-      ['LN_L1', 'DS_L1', sw(this.disc)], ['F1_IN', 'F1_OUT', f.has('fuse_open') ? O : 0],
-      ['EN_1', 'EN_2', sw(this.call)], ['PR_A', 'PR_B', f.has('pr_coil') ? O : 380], ['PR_C', 'PR_NO', sw(this.en.pr)],
-      ['PM_1', 'PM_2', f.has('pm_open') ? O : 1.3],
+      /* 208 V power */
+      ['LN_L1', 'F1_IN', sw(this.disc)], ['LN_L2', 'F2_IN', sw(this.disc)], ['LN_L3', 'F3_IN', sw(this.disc)],
+      ['F1_IN', 'F1_OUT', leg(1)], ['F2_IN', 'F2_OUT', leg(2)], ['F3_IN', 'F3_OUT', leg(3)],
+      ['XF_H1', 'XF_H2', f.has('xfmr_open') ? O : 45],
+      ['M1_L1', 'M1_T1', m1(1)], ['M1_L2', 'M1_T2', m1(2)], ['M1_L3', 'M1_T3', m1(3)],
+      ['PS_L1', 'PS_T1', sw(en.ps)], ['PS_L2', 'PS_T2', sw(en.ps)], ['PS_L3', 'PS_T3', sw(en.ps)],
+      /* motor windings in delta */
+      ['BM_T1', 'BM_T2', f.has('blower_open') ? O : 9.6], ['BM_T2', 'BM_T3', 9.6], ['BM_T3', 'BM_T1', 9.6],
+      ['PM_T1', 'PM_T2', f.has('pm_open') ? O : 7.2], ['PM_T2', 'PM_T3', 7.2], ['PM_T3', 'PM_T1', 7.2],
+      /* 120 V control */
+      ['FU_IN', 'FU_OUT', f.has('fuse_open') ? O : 0],
+      ['EN_1', 'EN_2', sw(this.call)], ['OL_95', 'OL_96', sw(!this.olTrip)], ['PS_A', 'PS_B', f.has('ps_coil') ? O : 260],
+      ['M1_A', 'M1_B', f.has('m1_coil') ? O : 280],
       ['BS_1', 'BS_2', sw(this.burnerSw)], ['OC_1', 'OC_2', sw(this.ocClosed())], ['HL_1', 'HL_2', sw(this.hlClosed())],
       ['LW_1', 'LW_2', sw(this.lwClosed())], ['FS_1', 'FS_2', sw(this.fsClosed())],
       ['LG_1', 'LG_2', sw(!this.lgTrip)], ['HG_1', 'HG_2', sw(!this.hgTrip)], ['AP_1', 'AP_2', sw(this.apClosed())],
       ['RM_L1', 'RM_L2', 3300], ['RM_6', 'RM_L2', 22000], ['RM_7', 'RM_L2', 22000],
       ['RM_L1', 'RM_3', sw(this.out(3))], ['RM_L1', 'RM_4', sw(this.out(4))], ['RM_L1', 'RM_8', sw(this.out(8))], ['RM_L1', 'RM_9', sw(this.out(9))], ['RM_L1', 'RM_10', sw(this.out(10))],
-      ['BM_1', 'BM_2', f.has('blower_open') ? O : 1.9], ['AL_1', 'AL_2', 150], ['PV_1', 'PV_2', f.has('pv_open') ? O : 640],
+      ['AL_1', 'AL_2', 150], ['PV_1', 'PV_2', f.has('pv_open') ? O : 640],
       ['V1_1', 'V1_2', f.has('v1_open') ? O : 1150], ['V2_1', 'V2_2', f.has('v2_open') ? O : 1150], ['IG_1', 'IG_2', f.has('ig_open') ? O : 2.2]
     ];
   },
-  solve() { this.V = solveVolts(this.elements(), { LN_L1: this.line, LN_N: 0 }); },
+  /* wye 208 V service with a grounded neutral: each leg is 120 V to ground. The control transformer secondary follows
+     whatever its primary sees, so it is solved in two passes: power side first, then the 120 V side from X1 */
+  solve() {
+    const L = this.line / Math.sqrt(3), src = { LN_L1: phasor(L, 0), LN_L2: phasor(L, -120), LN_L3: phasor(L, 120), GND: [0, 0] };
+    const els = this.elements();
+    let V = solveVolts(els, src);
+    const h1 = V[NET_OF.XF_H1], h2 = V[NET_OF.XF_H2];
+    if (h1 && h2 && !this.faults.has('xfmr_open')) {
+      src.XF_X1 = [(h1[0] - h2[0]) * XF_RATIO, (h1[1] - h2[1]) * XF_RATIO];
+      if (Math.hypot(src.XF_X1[0], src.XF_X1[1]) > 1) V = solveVolts(els, src); else delete src.XF_X1;
+    }
+    this.V = V;
+  },
   vAt(id) { const v = this.V[NET_OF[id]]; return v == null ? null : v; },
-  across(a, b) { const x = this.vAt(a), y = this.vAt(b); if (x == null || y == null) return 0; return Math.abs(x - y); },
+  mag(id) { const v = this.vAt(id); return v ? Math.hypot(v[0], v[1]) : 0; },
+  across(a, b) { const x = this.vAt(a), y = this.vAt(b); if (x == null || y == null) return 0; return Math.hypot(x[0] - y[0], x[1] - y[1]); },
   volts(a, b) {
     if (a === 'FT_P' || a === 'FT_N' || b === 'FT_P' || b === 'FT_N') return 0;
     return this.across(a, b);
@@ -182,14 +225,21 @@ const Boiler = {
   tick(dt) {
     this.time += dt;
     const f = this.faults;
-    for (let k = 0; k < 2; k++) {        /* settle: relay coils pull in, then their contacts change the circuit */
+    for (let k = 0; k < 3; k++) {        /* settle: coils pull in, then their contacts change the circuit */
       this.solve();
-      this.lastPow = this.rmOK() && (this.vAt('RM_L1') || 0) > 90;
-      this.en.pr = this.across('PR_A', 'PR_B') > 85 && !f.has('pr_coil');
+      this.lastPow = this.rmOK() && this.mag('RM_L1') > 90;
+      this.en.ps = this.across('PS_A', 'PS_B') > 85 && !f.has('ps_coil');
+      this.en.m1 = this.across('M1_A', 'M1_B') > 85 && !f.has('m1_coil');
     }
     const on = (a, b) => this.across(a, b) > 90;
-    const pumpV = on('PM_1', 'PM_2'), blowV = on('BM_1', 'BM_2');
-    this.en.pumpV = pumpV; this.en.blowV = blowV;
+    /* a 3-phase motor starts only with all three legs; on two legs (single-phasing) or with a winding open it hums */
+    const three = (p, k) => on(p + '1', p + '2') && on(p + '2', p + '3') && on(p + '3', p + '1') && Math.min(this.across(p + '1', p + '2'), this.across(p + '2', p + '3'), this.across(p + '3', p + '1')) > 180;
+    const any = p => on(p + '1', p + '2') || on(p + '2', p + '3') || on(p + '3', p + '1');
+    const pumpV = three('PM_T') && !f.has('pm_open'), blowV = three('BM_T') && !f.has('blower_open');
+    this.pumpHum = !pumpV && any('PM_T'); this.blowerHum = !blowV && any('BM_T');
+    /* the pump overload trips after a few seconds of locked-rotor current and stays out until someone resets it */
+    if (this.pumpHum) { this.humT += dt; if (this.humT > 8) { this.olTrip = true; this.note('Pump overload tripped.'); } } else this.humT = 0;
+    this.en.pumpV = pumpV || this.pumpHum; this.en.blowV = blowV || this.blowerHum;
     this.en.pv = on('PV_1', 'PV_2') && !f.has('pv_open');
     this.en.v1 = on('V1_1', 'V1_2') && !f.has('v1_open');
     this.en.v2 = on('V2_1', 'V2_2') && !f.has('v2_open');
@@ -197,7 +247,7 @@ const Boiler = {
     this.en.alarm = on('AL_1', 'AL_2');
 
     /* water side */
-    this.pumpRun = pumpV && !f.has('pm_open');
+    this.pumpRun = pumpV;
     let flow = 0, dp = 0;
     if (this.pumpRun) {
       if (f.has('coupler')) { flow = 0; dp = 0; }
@@ -209,7 +259,7 @@ const Boiler = {
     this.flow = flow; this.dp = dp;
 
     /* air: blower static pressure at the air switch port, in. w.c. */
-    this.blowerRun = blowV && !f.has('blower_open');
+    this.blowerRun = blowV;
     this.air = this.blowerRun ? (f.has('blower_dirty') ? 0.62 : 1.40) : 0;
 
     /* gas pressures, in. w.c. */
@@ -257,8 +307,8 @@ const Boiler = {
 
   /* ----- the flame safeguard ----- */
   rmStep(d) {
-    const r = this.rm, pow = this.rmOK() && (this.vAt('RM_L1') || 0) > 90;
-    const t6 = (this.vAt('RM_6') || 0) > 90, t7 = (this.vAt('RM_7') || 0) > 90, flame = this.sig >= FLAME_MIN;
+    const r = this.rm, pow = this.rmOK() && this.mag('RM_L1') > 90;
+    const t6 = this.mag('RM_6') > 90, t7 = this.mag('RM_7') > 90, flame = this.sig >= FLAME_MIN;
     const go = (st, t) => { r.st = st; r.t = t || 0; r.el = 0; r.ilk = false; r.hold = 0; };
     const lock = msg => { r.hist.unshift({ msg, at: RM_TEXT[r.st] }); r.hist = r.hist.slice(0, 6); r.lock = msg; go('LOCKOUT'); this.note('Flame safeguard LOCKOUT: ' + msg); };
     if (!pow) { if (r.st !== 'LOCKOUT') go('OFF'); return; }
@@ -304,20 +354,29 @@ const Boiler = {
   rmReset(silent) {
     const r = this.rm;
     if (r.st !== 'LOCKOUT') return false;
-    if (!this.rmOK() || (this.vAt('RM_L1') || 0) < 90) return false;
+    if (!this.rmOK() || this.mag('RM_L1') < 90) return false;
     r.st = 'INIT'; r.t = 10; r.el = 0; r.lock = '';
     if (!silent) this.resetsSinceFix++;
     return true;
   },
 
   /* ----- readings for the tools ----- */
+  /* clamp readings. Motor legs: running current, or locked-rotor current on the legs that still have power */
   amps(where) {
     const j = v => v * (1 + Math.sin(this.time * 3.1) * 0.01), f = this.faults;
-    const pump = !this.pumpRun ? 0 : f.has('coupler') ? 3.6 : f.has('iso_closed') ? 6.9 : f.has('air_bound') ? 6.0 + Math.sin(this.time * 0.9) * 0.8 : f.has('strainer') ? 8.3 : 10.2;
-    const blow = this.blowerRun ? (f.has('blower_dirty') ? 4.5 : 5.8) : 0;
+    const pumpRun = f.has('coupler') ? 1.4 : f.has('iso_closed') ? 2.4 : f.has('air_bound') ? 2.1 + Math.sin(this.time * 0.9) * 0.3 : f.has('strainer') ? 2.9 : 3.3;
+    /* on a lost leg the dead terminal only shows a phantom voltage (about half) to the others, and carries no current */
+    const motor = (run, hum, p, runA, lra, k) => run ? runA : !hum ? 0 : [1, 2, 3].some(o => o !== k && this.across(p + k, p + o) > 180) ? lra : 0;
+    const m = {};
+    [1, 2, 3].forEach(k => {
+      m['pump' + k] = motor(this.pumpRun, this.pumpHum, 'PM_T', pumpRun, 16.5, k);
+      m['blower' + k] = motor(this.blowerRun, this.blowerHum, 'BM_T', f.has('blower_dirty') ? 2.0 : 2.6, 13.8, k);
+    });
     const ign = this.en.ig ? 1.3 : 0, pv = this.en.pv ? 0.19 : 0, mv = (this.en.v1 ? 0.1 : 0) + (this.en.v2 ? 0.1 : 0), al = this.en.alarm ? 0.35 : 0;
-    const prc = this.en.pr ? 0.06 : 0, rmc = this.lastPow ? 0.04 : 0;
-    const m = { pump, blower: blow, ign, line: pump + blow + ign + pv + mv + al + prc + rmc };
+    const coils = (this.en.ps ? 0.45 : 0) + (this.en.m1 ? 0.4 : 0), rmc = this.lastPow ? 0.04 : 0;
+    m.ign = ign;
+    m.x1 = ign + pv + mv + al + coils + rmc;
+    m.line = m.pump1 + m.blower1 + m.x1 * XF_RATIO;
     return j(m[where] || 0);
   },
   analyzer() {
@@ -338,23 +397,27 @@ const Boiler = {
     const f = this.faults;
     return {
       rm: this.rm.st, flame: this.main ? 'main' : this.pilot ? 'pilot' : this.spark ? 'spark' : 'none',
-      blower: this.blowerRun ? 'run' : this.en.blowV ? 'hum' : 'off',
-      pump: this.pumpRun ? 'run' : this.en.pumpV ? 'hum' : 'off',
+      blower: this.blowerRun ? 'run' : this.blowerHum ? 'hum' : 'off',
+      pump: this.pumpRun ? 'run' : this.pumpHum ? 'hum' : 'off',
       alarm: this.en.alarm, Tb: this.Tb, P: this.P, Tr: this.returnT(), relief: this.relief,
-      lwLamp: this.lastPow !== undefined && (this.vAt('F1_OUT') || 0) > 90 && (f.has('lwco_dirty') || this.lowWater()),
-      hlTrip: this.hlTrip, lgTrip: this.lgTrip, hgTrip: this.hgTrip
+      lwLamp: this.lastPow !== undefined && this.mag('FU_OUT') > 90 && (f.has('lwco_dirty') || this.lowWater()),
+      hlTrip: this.hlTrip, lgTrip: this.lgTrip, hgTrip: this.hgTrip, olTrip: this.olTrip
     };
   },
   healthy() {
-    return this.faults.size === 0 && !this.hlTrip && !this.lgTrip && !this.hgTrip && this.rm.st === 'RUN' && this.rm.runT > 4;
+    return this.faults.size === 0 && !this.hlTrip && !this.lgTrip && !this.hgTrip && !this.olTrip && this.rm.st === 'RUN' && this.rm.runT > 4;
   }
 };
 
 /* ---- parts.js ---- */
 /* ===== Parts counter: every part or action a trainee can pick, and which fault each one cures ===== */
 const PARTS = {
-  fuse:      { name: 'Control fuse F1 (10 A)', g: 'Power and controls' },
-  prelay:    { name: 'Pump relay PR (120 V coil)', g: 'Power and controls' },
+  pfuse:     { name: 'Disconnect fuse (one leg, 15 A)', g: 'Power and controls' },
+  xfmr:      { name: 'Control transformer (208 / 120 V)', g: 'Power and controls' },
+  fuse:      { name: 'Control fuse FU4 (3 A)', g: 'Power and controls' },
+  pstarter:  { name: 'Pump starter (contactor with 120 V coil)', g: 'Power and controls' },
+  olreset:   { name: 'Press the reset button on the pump overload', g: 'Power and controls', live: true, reset: 'ol' },
+  m1:        { name: 'Blower contactor M1 (120 V coil)', g: 'Power and controls' },
   oc:        { name: 'Operating aquastat', g: 'Power and controls' },
   hl:        { name: 'High limit aquastat (manual reset)', g: 'Power and controls' },
   hlreset:   { name: 'Press the reset button on the high limit', g: 'Power and controls', live: true, reset: 'hl' },
@@ -393,7 +456,7 @@ const PARTS = {
   jmplwco:   { name: 'Remove jumper: low-water cutoff', g: 'Remove a jumper', jumper: true }
 };
 const FIXES = {
-  fuse_open: 'fuse', pr_coil: 'prelay', oc_bad: 'oc', oc_stuck: 'oc', hl_bad: 'hl', rm_bad: 'rm', amp_bad: 'amp', scanner_bad: 'scanner',
+  fuse_open: 'fuse', fuse_L1: 'pfuse', fuse_L2: 'pfuse', fuse_L3: 'pfuse', xfmr_open: 'xfmr', ps_coil: 'pstarter', m1_coil: 'm1', m1_pole: 'm1', oc_bad: 'oc', oc_stuck: 'oc', hl_bad: 'hl', rm_bad: 'rm', amp_bad: 'amp', scanner_bad: 'scanner',
   lens_dirty: 'scanclean', ig_open: 'ignx', electrode: 'electrode', pv_open: 'pilotv', pilot_cock: 'pilotcock', blower_open: 'blower',
   blower_dirty: 'blowclean', aps_bad: 'aps', aps_weld: 'aps', aps_tube: 'apstube', linkage: 'linkage', tubes_soot: 'tubes',
   gas_closed: 'gascock', gas_low: 'gasutil', reg_high: 'gasreg', reg_low: 'gasreg', v1_open: 'mainv1', v2_open: 'mainv2',
@@ -407,7 +470,7 @@ function inspectText(k, B) {
   const f = B.faults, off = !B.disc;
   const T = {
     burner: () => 'Burner head and blower housing. ' + (B.blowerRun ? 'The blower is running.' : 'The blower is stopped.'),
-    blower: () => !off ? 'Open the disconnect before you reach into the blower housing.' : f.has('blower_dirty') ? 'The blower wheel blades are packed with lint and dust, and the air inlet screen is matted over.' : 'The blower wheel is clean and spins freely by hand. The inlet screen is clear.',
+    blower: () => B.blowerHum ? 'The blower motor hums loudly but the wheel does not turn. The motor is getting hot.' : !off ? 'Open the disconnect before you reach into the blower housing.' : f.has('blower_dirty') ? 'The blower wheel blades are packed with lint and dust, and the air inlet screen is matted over.' : 'The blower wheel is clean and spins freely by hand. The inlet screen is clear.',
     damper: () => f.has('linkage') ? 'The air damper is much further open than the paint mark on the shaft. The linkage set screw is loose.' : 'The air damper lines up with the paint mark on its shaft. The linkage is tight.',
     aps: () => f.has('aps_tube') ? 'The sensing tube from the blower housing to the switch is cracked through at a tight bend.' : 'The sensing tube is soft and whole, pushed fully on both barbs. Setpoint 0.5 in. w.c.',
     sight: () => B.main ? 'Through the sight glass: a steady main flame' + (f.has('linkage') ? ', short and lifting off the burner head, very blue.' : f.has('blower_dirty') ? ', long, lazy and yellow-tipped.' : ', blue with a firm shape.') : B.pilot ? 'Through the sight glass: a pilot flame.' : B.spark ? 'Through the sight glass: a spark snapping at the pilot, but no flame.' : 'Through the sight glass: dark.',
@@ -422,7 +485,7 @@ function inspectText(k, B) {
     v1: () => 'Main gas valve V1 actuator. ' + (B.en.v1 ? 'The OPEN indicator shows.' : 'The indicator shows CLOSED.'),
     v2: () => 'Main gas valve V2 actuator. ' + (B.en.v2 ? 'The OPEN indicator shows.' : 'The indicator shows CLOSED.'),
     pv: () => 'Pilot solenoid valve. ' + (B.en.pv ? 'It is warm and humming.' : 'It is quiet.'),
-    pump: () => B.pumpRun ? (f.has('coupler') ? 'The pump motor is running. The coupler guard is warm. Through the guard slots the motor shaft spins but the pump shaft does not.' : f.has('air_bound') ? 'The pump is running and you can hear gravel-like rattling in the volute.' : 'The pump is running smoothly.') : B.en.pumpV ? 'The pump motor hums but does not turn. Hot to the touch.' : 'The pump is stopped.',
+    pump: () => B.pumpRun ? (f.has('coupler') ? 'The pump motor is running. The coupler guard is warm. Through the guard slots the motor shaft spins but the pump shaft does not.' : f.has('air_bound') ? 'The pump is running and you can hear gravel-like rattling in the volute.' : 'The pump is running smoothly.') : B.pumpHum ? 'The pump motor hums but does not turn. Hot to the touch.' : 'The pump is stopped.',
     coupler: () => !off ? 'Open the disconnect before you take the coupler guard off.' : f.has('coupler') ? 'With the guard off: the rubber coupler insert is shredded. The motor half spins free.' : 'With the guard off: the coupler is whole and tight.',
     iso: () => f.has('iso_closed') ? 'The suction isolation valve handle is across the pipe.' : 'Both pump isolation valves have their handles in line with the pipe.',
     strainer: () => 'Y-strainer on the pump suction. ' + (off && f.has('strainer') ? 'With the cap off: the basket is packed with scale and debris.' : off ? 'With the cap off: the basket is clean.' : 'Isolate and shut off the pump before you open it.'),
@@ -435,6 +498,7 @@ function inspectText(k, B) {
     vent: () => 'Automatic air vent on the air separator. ' + (f.has('air_bound') ? 'It hisses air when you push the cap.' : 'Quiet.'),
     stack: () => 'Flue outlet and the analyzer test port.',
     tubes: () => !off ? 'Open the disconnect before you open the boiler door.' : f.has('tubes_soot') ? 'With the rear door open: the fire tubes are lined with soft black soot.' : 'With the rear door open: the fire tubes are clean.',
+    olr: () => 'Pump overload relay, manual reset. ' + (B.olTrip ? 'The trip flag is showing.' : 'The trip flag is not showing.'),
     rm: () => 'Flame safeguard relay module with keyboard display. ' + (B.rmOK() ? '' : 'The display and all LEDs are dark.'),
     alarm: () => B.en.alarm ? 'The red alarm light is on.' : 'The alarm light is off.',
     jumper: () => f.has('jmp_lwco') ? 'In the control cabinet, a short wire jumper is screwed across the two low-water cutoff terminals.' : 'No jumpers on the safety terminals.'
@@ -442,21 +506,347 @@ function inspectText(k, B) {
   return T[k] ? T[k]() : '';
 }
 
+/* ---- ptdraw.js ---- */
+/* Copied unchanged from the Package Unit Troubleshooting game (parts.js, the PT artwork helpers) so both games' panels look alike. */
+/* ===== Realistic component artwork for the unit panel pages =====
+   Every helper returns SVG drawn BEHIND the terminal dots. Terminals keep their positions;
+   the art is placed around them so each dot looks like a screw on the real part. */
+const PT = {
+  defs: '<defs>' +
+    '<linearGradient id="ptMetal" x1="0" x2="1"><stop offset="0" stop-color="#6b7886"/><stop offset=".35" stop-color="#cfd8e0"/><stop offset=".7" stop-color="#8c99a6"/><stop offset="1" stop-color="#58646f"/></linearGradient>' +
+    '<linearGradient id="ptMetalV" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d7dfe6"/><stop offset=".5" stop-color="#8c99a6"/><stop offset="1" stop-color="#56626d"/></linearGradient>' +
+    '<linearGradient id="ptBrass" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#f0cf80"/><stop offset=".5" stop-color="#c9953a"/><stop offset="1" stop-color="#8a5f1c"/></linearGradient>' +
+    '<linearGradient id="ptBlack" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#3a4048"/><stop offset=".5" stop-color="#22272d"/><stop offset="1" stop-color="#14181c"/></linearGradient>' +
+    '<linearGradient id="ptBlue" x1="0" x2="1"><stop offset="0" stop-color="#1d4e8f"/><stop offset=".4" stop-color="#3b82d6"/><stop offset="1" stop-color="#173f73"/></linearGradient>' +
+    '<linearGradient id="ptCopper" x1="0" x2="1"><stop offset="0" stop-color="#8a4a20"/><stop offset=".5" stop-color="#e0995a"/><stop offset="1" stop-color="#7a3f18"/></linearGradient>' +
+    '<linearGradient id="ptBeige" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#e9e4d6"/><stop offset="1" stop-color="#c9c2ad"/></linearGradient>' +
+    '</defs>',
+  /* brass screw lug behind a terminal dot */
+  lug(x, y, dir) {
+    const w = 34, h = 22; dir = dir || 'c';
+    return `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="3" fill="url(#ptBrass)" stroke="#5c3f10" stroke-width="1.2"/>`;
+  },
+  lugs(list) { return list.map(([x, y]) => PT.lug(x, y)).join(''); },
+  /* contactor: moulded body, fixed contact stems (line above / load below), a moving carrier with
+     copper bridges that slides up (open) and down (closed), and a coil can with an armature plate.
+     k = id used by app.js to animate it (data-k). */
+  contactor(x, y, w, h, poles, yt, yb, coil, k) {
+    const mid = (yt + yb) / 2;
+    let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="9" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/>`;
+    s += `<rect x="${x + 5}" y="${y + 5}" width="${w - 10}" height="${h - 10}" rx="6" fill="none" stroke="#4a525b" stroke-width="1" opacity=".7"/>`;
+    s += `<rect x="${x + 8}" y="${y + 8}" width="${w - 16}" height="10" rx="3" fill="#2d343b"/><rect x="${x + 8}" y="${y + h - 18}" width="${w - 16}" height="10" rx="3" fill="#2d343b"/>`;
+    [[x + 14, y + 13], [x + w - 14, y + 13], [x + 14, y + h - 13], [x + w - 14, y + h - 13]].forEach(([cx, cy]) => { s += `<circle cx="${cx}" cy="${cy}" r="4" fill="#0e1114" stroke="#6b7886"/>`; });
+    poles.forEach(px => {
+      s += `<rect x="${px - 22}" y="${yt - 16}" width="44" height="${yb - yt + 32}" rx="6" fill="#1b2026" stroke="#0a0d10"/>`;
+      s += `<rect x="${px - 6}" y="${yt + 10}" width="12" height="${mid - 8 - yt - 10}" fill="url(#ptCopper)"/><rect x="${px - 6}" y="${mid + 8}" width="12" height="${yb - 10 - mid - 8}" fill="url(#ptCopper)"/>`;
+      s += `<rect x="${px - 9}" y="${mid - 14}" width="18" height="6" rx="2" fill="url(#ptMetal)" stroke="#3d4650"/><rect x="${px - 9}" y="${mid + 8}" width="18" height="6" rx="2" fill="url(#ptMetal)" stroke="#3d4650"/>`;
+    });
+    if (coil) {
+      const [cx, c1, c2] = coil;
+      s += `<rect x="${cx - 28}" y="${c1 - 10}" width="56" height="${c2 - c1 + 20}" rx="8" fill="#3a4048" stroke="#10151a"/>`;
+      for (let yy = c1 + 12; yy < c2 - 8; yy += 7) s += `<line x1="${cx - 22}" y1="${yy}" x2="${cx + 22}" y2="${yy}" stroke="#8a5f1c" stroke-width="3"/>`;
+      s += `<rect class="coilglow" data-k="${k}" x="${cx - 28}" y="${c1 - 10}" width="56" height="${c2 - c1 + 20}" rx="8" fill="#38e08a" opacity="0" style="transition:opacity .25s;pointer-events:none"/>`;
+    }
+    const lx = poles[0] - 26, rx = coil ? coil[0] - 38 : poles[poles.length - 1] + 26;
+    let g = `<rect x="${lx}" y="${mid - 7}" width="${rx - lx}" height="14" rx="4" fill="url(#ptMetalV)" stroke="#3d4650"/>`;
+    poles.forEach(px => { g += `<rect x="${px - 15}" y="${mid - 22}" width="30" height="44" rx="5" fill="url(#ptCopper)" stroke="#4a2410"/><rect x="${px - 15}" y="${mid - 22}" width="30" height="5" fill="#f0cf80" opacity=".6"/>`; });
+    s += `<g class="armg" data-k="${k}" style="transform:translateY(-26px)">${g}</g>`;
+    if (coil) {
+      // laminated pole face on the coil, and the armature plate that is pulled in against it when the coil energizes
+      const [cx, c1, c2] = coil;
+      s += `<rect x="${cx - 30}" y="${mid - 40}" width="4" height="80" rx="2" fill="#2f3943" stroke="#10151a"/>`;
+      let pl = `<rect x="${cx - 38}" y="${mid - 38}" width="10" height="76" rx="3" fill="url(#ptMetal)" stroke="#2f3943" stroke-width="1.5"/>`;
+      for (let yy = mid - 30; yy < mid + 34; yy += 8) pl += `<line x1="${cx - 37}" y1="${yy}" x2="${cx - 29}" y2="${yy}" stroke="#56626d" stroke-width="1"/>`;
+      pl += `<circle cx="${cx - 33}" cy="${mid}" r="3.5" fill="#c9953a" stroke="#5c3f10"/>`;
+      s += `<g class="armp" data-k="${k}" style="transform:translateX(-7px)">${pl}</g>`;
+    }
+    s += `<rect x="${x + w / 2 - 43}" y="${y + 3}" width="86" height="17" rx="8" fill="#14181c" stroke="#3d4650"/><circle class="kled" data-k="${k}" cx="${x + w / 2 - 31}" cy="${y + 11.5}" r="4" fill="#55616d"/><text class="kbadge" data-k="${k}" x="${x + w / 2 + 8}" y="${y + 15}" text-anchor="middle" style="font:700 10px sans-serif;fill:#c8d2dc">K OPEN</text>`;
+    return s + PT.lugs(poles.reduce((a, px) => a.concat([[px, yt], [px, yb]]), []).concat(coil ? [[coil[0], coil[1]], [coil[0], coil[2]]] : []));
+  },
+  /* oval dual run capacitor can with terminals on top */
+  can(x, y, w, h, lab, sub) {
+    let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${Math.min(w, h) * 0.28}" fill="url(#ptMetal)" stroke="#3d4650" stroke-width="2"/>`;
+    s += `<rect x="${x + 4}" y="${y + 4}" width="${w - 8}" height="26" rx="8" fill="#26303a"/>`;
+    s += `<rect x="${x + w * 0.22}" y="${y + h * 0.42}" width="${w * 0.56}" height="${h * 0.34}" rx="4" fill="#f1f3f5" opacity=".92"/>`;
+    s += `<text x="${x + w / 2}" y="${y + h * 0.42 + 16}" text-anchor="middle" style="font:700 12px sans-serif;fill:#20262c">${lab}</text><text x="${x + w / 2}" y="${y + h * 0.42 + 32}" text-anchor="middle" style="font:600 10px sans-serif;fill:#3a434c">${sub || ''}</text>`;
+    return s;
+  },
+  /* capacitor seen from above: aluminum can rim, dark plastic top with a raised base under every terminal,
+     a pressure-relief vent, and the printed rating sticker. terms = [[x,y],...]; stick = [cx,cy,w,h]; vent = [x,y] */
+  cap(x, y, w, h, lab, sub, terms, stick, vent) {
+    const r = Math.min(w, h) / 2;
+    let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="url(#ptMetal)" stroke="#3d4650" stroke-width="2.5"/>`;
+    s += `<rect x="${x + 7}" y="${y + 7}" width="${w - 14}" height="${h - 14}" rx="${r - 7}" fill="#8c99a6" stroke="#56626d"/>`;
+    s += `<rect x="${x + 12}" y="${y + 12}" width="${w - 24}" height="${h - 24}" rx="${r - 12}" fill="#232a31" stroke="#0e1114" stroke-width="1.5"/>`;
+    s += `<rect x="${x + 16}" y="${y + 16}" width="${w - 32}" height="${h - 32}" rx="${Math.max(r - 16, 4)}" fill="none" stroke="#3a434c" stroke-width="1"/>`;
+    terms.forEach(([tx, ty]) => { s += `<circle cx="${tx}" cy="${ty}" r="22" fill="#12161a" stroke="#4a525b" stroke-width="2"/><circle cx="${tx}" cy="${ty}" r="17" fill="none" stroke="#2c343c" stroke-width="2"/>`; });
+    if (vent) s += `<circle cx="${vent[0]}" cy="${vent[1]}" r="9" fill="#303840" stroke="#5c6670"/><path d="M${vent[0] - 5} ${vent[1]} h10 M${vent[0]} ${vent[1] - 5} v10" stroke="#8c99a6" stroke-width="2"/>`;
+    return s;
+  },
+  /* hermetic compressor shell with terminal plate */
+  hermetic(x, y, w, h) {
+    const cx = x + w / 2;
+    let s = `<path d="M${x + 10} ${y + h * 0.28} Q${x + 10} ${y} ${cx} ${y} Q${x + w - 10} ${y} ${x + w - 10} ${y + h * 0.28} V${y + h - 30} Q${x + w - 10} ${y + h} ${cx} ${y + h} Q${x + 10} ${y + h} ${x + 10} ${y + h - 30} Z" fill="url(#ptMetal)" stroke="#2f3943" stroke-width="2.5"/>`;
+    s += `<path d="M${x + 11} ${y + h * 0.3} H${x + w - 11}" stroke="#2a323a" stroke-width="3"/>`;
+    s += `<rect x="${x + 11}" y="${y + h * 0.78}" width="${w - 22}" height="14" fill="#2a323a" opacity=".55"/>`;
+    s += `<rect x="${x + w - 62}" y="${y + h * 0.43}" width="42" height="26" rx="3" fill="#e9edf1" stroke="#6b7886"/><path d="M${x + w - 56} ${y + h * 0.43 + 8} h30 M${x + w - 56} ${y + h * 0.43 + 14} h24 M${x + w - 56} ${y + h * 0.43 + 20} h28" stroke="#6b7886"/>`;
+    return s;
+  },
+  /* compressor terminal head ("pecker head"): steel weld flange around three glass-sealed fusite pins, with a mounting stud and
+     a spring retainer clip across the top. pins = [[x,y],[x,y],[x,y]] */
+  peckerA(pins) {
+    const pts = pins.map(p => p.join(',')).join(' ');
+    const cx = pins.reduce((a, p) => a + p[0], 0) / pins.length, cy = pins.reduce((a, p) => a + p[1], 0) / pins.length;
+    let s = `<polygon points="${pts}" fill="#2f3943" stroke="#2f3943" stroke-width="76" stroke-linejoin="round"/>`;
+    s += `<polygon points="${pts}" fill="url(#ptMetal)" stroke="url(#ptMetal)" stroke-width="68" stroke-linejoin="round"/>`;
+    s += `<polygon points="${pts}" fill="none" stroke="#56626d" stroke-width="56" stroke-linejoin="round" opacity=".7"/>`;
+    s += `<polygon points="${pts}" fill="#8c99a6" stroke="#6b7886" stroke-width="40" stroke-linejoin="round" opacity=".55"/>`;
+    pins.forEach(([x, y]) => {
+      s += `<circle cx="${x}" cy="${y}" r="27" fill="#1b2026" stroke="#0b0e11" stroke-width="2"/><circle cx="${x}" cy="${y}" r="22" fill="url(#ptBlack)" stroke="#4a525b" stroke-width="2"/>`;
+      s += `<circle cx="${x}" cy="${y}" r="17" fill="none" stroke="#6b7886" stroke-width="1.5" opacity=".7"/>`;
+    });
+    s += `<circle cx="${cx}" cy="${cy + 8}" r="9" fill="url(#ptMetalV)" stroke="#3d4650"/><path d="M${cx - 5} ${cy + 8} h10 M${cx} ${cy + 3} v10" stroke="#3d4650" stroke-width="1.5"/>`;
+    return s;
+  },
+  /* compressor terminal head, molded-block style: a black plastic terminal box with ribbed sides, a raised lid lip, corner screws and
+     a round brass-collared socket for each pin. pins = [[x,y],[x,y],[x,y]] */
+  pecker(pins, box) {
+    const xs = pins.map(p => p[0]), ys = pins.map(p => p[1]);
+    const x1 = box ? box[0] : Math.min(...xs) - 38, y1 = box ? box[1] : Math.min(...ys) - 38, x2 = box ? box[0] + box[2] : Math.max(...xs) + 38, y2 = box ? box[1] + box[3] : Math.max(...ys) + 38, w = x2 - x1, h = y2 - y1;
+    let s = `<rect x="${x1 - 6}" y="${y1 + 10}" width="${w + 12}" height="${h - 20}" rx="10" fill="#2a3036" stroke="#0b0e11" stroke-width="2"/>`;
+    for (let yy = y1 + 22; yy < y2 - 18; yy += 9) s += `<line x1="${x1 - 6}" y1="${yy}" x2="${x1}" y2="${yy}" stroke="#4a525b" stroke-width="2"/><line x1="${x2}" y1="${yy}" x2="${x2 + 6}" y2="${yy}" stroke="#4a525b" stroke-width="2"/>`;
+    s += `<rect x="${x1}" y="${y1}" width="${w}" height="${h}" rx="14" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2.5"/>`;
+    s += `<rect x="${x1 + 7}" y="${y1 + 7}" width="${w - 14}" height="${h - 14}" rx="9" fill="#1d2329" stroke="#4a525b" stroke-width="1.5"/>`;
+    [[x1 + 14, y1 + 14], [x2 - 14, y1 + 14], [x1 + 14, y2 - 14], [x2 - 14, y2 - 14]].forEach(([x, y]) => { s += `<circle cx="${x}" cy="${y}" r="5.5" fill="url(#ptMetalV)" stroke="#2f3943"/><path d="M${x - 3} ${y} h6" stroke="#2f3943" stroke-width="1.5"/>`; });
+    pins.forEach(([x, y]) => {
+      s += `<circle cx="${x}" cy="${y}" r="27" fill="#0e1114" stroke="#4a525b" stroke-width="2"/><circle cx="${x}" cy="${y}" r="22" fill="url(#ptBrass)" stroke="#5c3f10" stroke-width="1.5"/><circle cx="${x}" cy="${y}" r="17" fill="#1b2026" stroke="#5c3f10"/>`;
+    });
+    s += `<rect x="${(x1 + x2) / 2 - 22}" y="${y2 - 20}" width="44" height="12" rx="3" fill="#2f3943" stroke="#4a525b"/><path d="M${(x1 + x2) / 2 - 14} ${y2 - 14} h28" stroke="#6b7886"/>`;
+    return s;
+  },
+  /* terminal cover with three pins (fusite) */
+  fusite(x, y, w, h) { return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/>`; },
+  /* PSC fan motor: finned can, shaft, bracket */
+  motor(x, y, w, h, shaft) {
+    const cy = y + h / 2;
+    let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h / 2.4}" fill="url(#ptBlue)" stroke="#0e2a4f" stroke-width="2"/>`;
+    for (let xx = x + 22; xx < x + w - 14; xx += 14) s += `<line x1="${xx}" y1="${y + 6}" x2="${xx}" y2="${y + h - 6}" stroke="#0e2a4f" stroke-width="2" opacity=".55"/>`;
+    s += `<rect x="${x + w * 0.35}" y="${y - 10}" width="${w * 0.3}" height="14" rx="3" fill="#8c99a6" stroke="#3d4650"/>`;
+    if (shaft !== false) s += `<rect x="${x + w - 2}" y="${cy - 7}" width="24" height="14" fill="url(#ptMetalV)" stroke="#3d4650"/>`;
+    s += `<rect x="${x + 12}" y="${y + h - 14}" width="${w - 24}" height="8" rx="3" fill="#20262c" opacity=".5"/>`;
+    return s;
+  },
+  /* control transformer: steel E-I core with two coil bobbins. Primary (high-voltage H1/H2) on the left, secondary (24 V / C) on the right.
+     c1/c2 = x of the primary/secondary terminal columns, t/b = y of the top/bottom terminal rows. */
+  xfmr(x, y, w, h, c1, c2, t, b, pl, sl) {
+    let s = `<rect x="${x - 8}" y="${y + h - 12}" width="24" height="10" rx="2" fill="url(#ptMetalV)" stroke="#2f3943"/><rect x="${x + w - 16}" y="${y + h - 12}" width="24" height="10" rx="2" fill="url(#ptMetalV)" stroke="#2f3943"/>`;
+    s += `<rect x="${x}" y="${y}" width="${w}" height="${h - 10}" rx="3" fill="url(#ptMetalV)" stroke="#2f3943" stroke-width="2"/>`;
+    for (let yy = y + 4; yy < y + h - 12; yy += 4) s += `<line x1="${x + 1}" y1="${yy}" x2="${x + w - 1}" y2="${yy}" stroke="#3d4650" stroke-width=".8" opacity=".55"/>`;
+    s += `<rect x="${(c1 + c2) / 2 - 6}" y="${y + 4}" width="12" height="${h - 18}" fill="#aeb9c3" opacity=".6"/>`;
+    const coil = (cx, wire, hi, tag) => {
+      const y1 = t - 20, y2 = b + 20;
+      let q = `<rect x="${cx - 32}" y="${y1}" width="64" height="${y2 - y1}" rx="6" fill="#10151a" stroke="#0a0d10"/>`;
+      q += `<rect x="${cx - 27}" y="${y1 + 5}" width="54" height="${y2 - y1 - 10}" rx="4" fill="${wire}"/>`;
+      for (let yy = y1 + 9; yy < y2 - 6; yy += 4) q += `<line x1="${cx - 25}" y1="${yy}" x2="${cx + 25}" y2="${yy}" stroke="${hi}" stroke-width="2" opacity=".7"/>`;
+      return q;
+    };
+    s += coil(c1, '#2a2f36', '#6b7480') + coil(c2, '#a4601f', '#f0b070');
+    [[c1, pl, 'PRIMARY'], [c2, sl, 'SECONDARY']].forEach(([cx, v, nm]) => {
+      const my = t + 52;
+      s += `<rect x="${cx - 27}" y="${my - 12}" width="54" height="24" rx="4" fill="#f1f3f5" stroke="#6b7886"/><text x="${cx}" y="${my - 2}" text-anchor="middle" style="font:700 9px sans-serif;fill:#20262c">${nm}</text><text x="${cx}" y="${my + 9}" text-anchor="middle" style="font:700 10px sans-serif;fill:#20262c">${v}</text>`;
+    });
+    return s;
+  },
+  /* 3 A blade fuse (ATO/ATC style, violet) standing in a black fuse block. The two blade terminals sit side by side at the foot of the
+     fuse: x1 = IN, x2 = OUT, y = terminal row. The blades run down from the fuse body into the brass lugs. */
+  fuse(x1, x2, y) {
+    const mid = (x1 + x2) / 2, w = x2 - x1 + 22, top = y - 60, bot = y - 12, L = mid - w / 2, R = mid + w / 2;
+    let s = `<rect x="${x1 - 30}" y="${y - 30}" width="${x2 - x1 + 60}" height="56" rx="10" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/>`;
+    s += `<rect x="${x1 - 30}" y="${y - 30}" width="${x2 - x1 + 60}" height="8" rx="4" fill="#4a525b" opacity=".6"/>`;
+    s += `<rect x="${x1 - 14}" y="${y - 24}" width="28" height="12" rx="3" fill="#07090b"/><rect x="${x2 - 14}" y="${y - 24}" width="28" height="12" rx="3" fill="#07090b"/>`;
+    s += `<rect x="${x1 - 5}" y="${y - 24}" width="10" height="26" fill="url(#ptMetal)" stroke="#3d4650"/><rect x="${x2 - 5}" y="${y - 24}" width="10" height="26" fill="url(#ptMetal)" stroke="#3d4650"/>`;
+    s += PT.lug(x1, y) + PT.lug(x2, y);
+    s += `<defs><linearGradient id="ptViolet" x1="0" x2="1"><stop offset="0" stop-color="#6d4fb8"/><stop offset=".3" stop-color="#b79cf2"/><stop offset=".75" stop-color="#8d6ed3"/><stop offset="1" stop-color="#58409a"/></linearGradient></defs>`;
+    s += `<path d="M${L} ${bot} V${top + 10} Q${L} ${top} ${L + 10} ${top} H${R - 10} Q${R} ${top} ${R} ${top + 10} V${bot} Z" fill="url(#ptViolet)" stroke="#33236b" stroke-width="2"/>`;
+    for (let i = 0; i < 3; i++) s += `<line x1="${mid - 16}" y1="${top + 8 + i * 5}" x2="${mid + 16}" y2="${top + 8 + i * 5}" stroke="#2c1d5e" stroke-width="1.6" opacity=".55"/>`;
+    s += `<rect x="${L + 4}" y="${top + 26}" width="${w - 8}" height="${bot - top - 32}" rx="3" fill="#000" opacity=".08"/>`;
+    s += `<text x="${mid}" y="${top + 44}" text-anchor="middle" style="font:700 19px sans-serif;fill:#f6f2ff;paint-order:stroke;stroke:#33236b;stroke-width:2.5px">3 A</text>`;
+    return s;
+  },
+  /* dark terminal bar behind a row of lugs (motor lead block) */
+  tbar(x1, x2, y) { return `<rect x="${x1}" y="${y - 14}" width="${x2 - x1}" height="28" rx="8" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="1.5"/>`; },
+  /* axial fan seen from the front: guard ring, five pitched blades, blue motor hub */
+  fan(cx, cy, r, hr, k) {
+    let s = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#171c21" stroke="#4a525b" stroke-width="3"/><circle cx="${cx}" cy="${cy}" r="${r - 5}" fill="none" stroke="#2c343c" stroke-width="1.5"/>`;
+    let b = '';
+    for (let i = 0; i < 5; i++) {
+      const a = i * 72, R = r - 9, h = hr - 2;
+      b += `<path transform="rotate(${a} ${cx} ${cy})" d="M${cx - 7} ${cy - h} C${cx - 34} ${cy - R * 0.45} ${cx - 30} ${cy - R * 0.9} ${cx + 4} ${cy - R} C${cx + 26} ${cy - R * 0.85} ${cx + 22} ${cy - R * 0.45} ${cx + 9} ${cy - h} Z" fill="url(#ptMetal)" stroke="#2f3943" stroke-width="1.5"/>`;
+    }
+    s += `<g class="fanblades spin" data-fan="${k}" style="transform-origin:${cx}px ${cy}px">${b}</g>`;
+    s += `<circle cx="${cx}" cy="${cy}" r="${hr}" fill="url(#ptBlue)" stroke="#0e2a4f" stroke-width="2"/><circle cx="${cx}" cy="${cy}" r="${hr * 0.55}" fill="none" stroke="#0e2a4f" stroke-width="2" opacity=".6"/>`;
+    return s;
+  },
+  /* squirrel-cage blower wheel seen end-on: housing ring, forward-curved blade slots, blue motor hub */
+  wheel(cx, cy, r, k) {
+    let s = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#171c21" stroke="#4a525b" stroke-width="3"/>`;
+    s += `<circle cx="${cx}" cy="${cy}" r="${r - 7}" fill="url(#ptMetal)" stroke="#2f3943" stroke-width="2"/>`;
+    let b = '';
+    for (let i = 0; i < 28; i++) {
+      const a = i * 360 / 28 * Math.PI / 180, r1 = r * 0.5, r2 = r - 10;
+      const x1 = cx + Math.cos(a) * r1, y1 = cy + Math.sin(a) * r1, x2 = cx + Math.cos(a + 0.35) * r2, y2 = cy + Math.sin(a + 0.35) * r2;
+      b += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#20272e" stroke-width="3.2" stroke-linecap="round"/>`;
+    }
+    s += `<g class="fanblades spin" data-fan="${k}" style="transform-origin:${cx}px ${cy}px">${b}</g><circle cx="${cx}" cy="${cy}" r="${r * 0.5}" fill="#171c21" stroke="#4a525b"/>`;
+    s += `<circle cx="${cx}" cy="${cy}" r="${r * 0.34}" fill="url(#ptBlue)" stroke="#0e2a4f" stroke-width="2"/><circle cx="${cx}" cy="${cy}" r="${r * 0.1}" fill="#cfd8e0" stroke="#3d4650"/>`;
+    return s;
+  },
+  /* terminal strip plate (thermostat subbase / board) */
+  plate(x, y, w, h, color) {
+    return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="${color || 'url(#ptBeige)'}" stroke="#8d8672" stroke-width="2"/>`;
+  },
+  /* safety switches between their in and out terminals. kind: hp, lp, float, frz, filter, phase */
+  pswitch(x1, x2, y, kind) {
+    const mid = (x1 + x2) / 2, L = x1 - 8, W = x2 - x1 + 16;
+    const hex = (cx, cy, r) => { let pts = ''; for (let a = 0; a < 6; a++) pts += (cx + r * Math.cos(a * Math.PI / 3)).toFixed(1) + ',' + (cy + r * Math.sin(a * Math.PI / 3)).toFixed(1) + ' '; return `<polygon points="${pts}" fill="url(#ptBrass)" stroke="#5c3f10"/>`; };
+    const blades = `<rect x="${x1 - 4}" y="${y - 3}" width="12" height="6" fill="#b9c3cc" stroke="#4a525b"/><rect x="${x2 - 8}" y="${y - 3}" width="12" height="6" fill="#b9c3cc" stroke="#4a525b"/>`;
+    if (kind === 'hp' || kind === 'lp') {
+      const col = kind === 'hp' ? '#b3302a' : '#2f6fb5', dk = kind === 'hp' ? '#6e1712' : '#173f6b';
+      let s = `<rect x="${L}" y="${y - 15}" width="${W}" height="30" rx="6" fill="url(#ptBlack)" stroke="#0b0e11"/>`;
+      s += `<rect x="${mid - 16}" y="${y - 18}" width="32" height="36" rx="6" fill="${col}" stroke="${dk}" stroke-width="2"/><ellipse cx="${mid - 4}" cy="${y - 8}" rx="9" ry="4" fill="#fff" opacity=".18"/>`;
+      s += `<text x="${mid}" y="${y + 5}" text-anchor="middle" style="font:800 12px sans-serif;fill:#fff;paint-order:stroke;stroke:${dk};stroke-width:2px">${kind === 'hp' ? 'HP' : 'LP'}</text>`;
+      return s + blades;
+    }
+    if (kind === 'float') {
+      let s = `<rect x="${L}" y="${y - 15}" width="${W}" height="30" rx="6" fill="url(#ptBlack)" stroke="#0b0e11"/>`;
+      s += `<line x1="${mid - 18}" y1="${y + 6}" x2="${mid + 8}" y2="${y - 4}" stroke="#aab4be" stroke-width="3" stroke-linecap="round"/>`;
+      s += `<circle cx="${mid + 14}" cy="${y - 4}" r="10" fill="#e8c24a" stroke="#7d6510" stroke-width="2"/><ellipse cx="${mid + 11}" cy="${y - 8}" rx="4" ry="2.5" fill="#fff" opacity=".45"/>`;
+      s += `<circle cx="${mid - 18}" cy="${y + 6}" r="3.5" fill="url(#ptMetal)" stroke="#3d4650"/>`;
+      return s + blades;
+    }
+    if (kind === 'frz') {
+      let s = `<rect x="${L}" y="${y - 15}" width="${W}" height="30" rx="6" fill="#d9dde1" stroke="#7b848c" stroke-width="1.5"/>`;
+      s += `<circle cx="${mid - 12}" cy="${y}" r="10" fill="#f4f6f8" stroke="#6b7480" stroke-width="1.5"/><line x1="${mid - 12}" y1="${y}" x2="${mid - 6}" y2="${y - 6}" stroke="#b3302a" stroke-width="2"/>`;
+      let w = `M${mid + 4} ${y}`; for (let k = 0; k < 3; k++) w += ' q3 -9 6 0 q3 9 6 0';
+      s += `<path d="${w}" fill="none" stroke="#6b7480" stroke-width="2"/>`;
+      return s + blades;
+    }
+    if (kind === 'filter') {
+      let s = `<rect x="${L}" y="${y - 15}" width="${W}" height="30" rx="6" fill="#aab4be" stroke="#4a525b" stroke-width="1.5"/>`;
+      s += `<circle cx="${mid}" cy="${y}" r="11" fill="#1b2128" stroke="#4a525b" stroke-width="2"/><line x1="${mid}" y1="${y}" x2="${mid + 6}" y2="${y - 7}" stroke="#e8c24a" stroke-width="2"/><circle cx="${mid}" cy="${y}" r="2" fill="#cfd8e0"/>`;
+      s += `<rect x="${mid - 22}" y="${y - 20}" width="6" height="7" fill="#c9953a" stroke="#5c3f10"/><rect x="${mid + 16}" y="${y - 20}" width="6" height="7" fill="#c9953a" stroke="#5c3f10"/>`;
+      return s + blades;
+    }
+    if (kind === 'phase') {
+      let s = `<rect x="${L}" y="${y - 16}" width="${W}" height="32" rx="5" fill="#1d4d34" stroke="#0b2418" stroke-width="1.5"/>`;
+      s += `<circle cx="${mid - 8}" cy="${y}" r="5" fill="#38e08a" stroke="#0b2418"/><circle cx="${mid + 8}" cy="${y}" r="5" fill="#7a2a24" stroke="#0b2418"/>`;
+      return s + blades;
+    }
+    return `<rect x="${L}" y="${y - 18}" width="${W}" height="36" rx="7" fill="url(#ptBlack)" stroke="#0b0e11"/>` + hex(mid, y, 11) + blades;
+  },
+  /* plug-in SPDT relay. Lug layout (relative to x,y): COM (70,30) top-left, NC (30,100), NO (110,100) bottom-left,
+     coil A (200,30) / B (200,100) down the right. The blade is hinged at COM and swings to NC (de-energized) or NO (energized). */
+  relay(x, y, w, h, k) {
+    let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="#16202a" stroke="#0b0e11" stroke-width="2"/>`;
+    s += `<rect x="${x + 6}" y="${y + 6}" width="${w - 12}" height="${h - 12}" rx="6" fill="#9ec4de" opacity=".14" stroke="#9ec4de" stroke-opacity=".5"/>`;
+    s += `<line x1="${x + 156}" y1="${y + 12}" x2="${x + 156}" y2="${y + h - 12}" stroke="#4a5560" stroke-dasharray="4 4"/>`;
+    s += `<text x="${x + 112}" y="${y + 20}" text-anchor="middle" style="font:700 10px sans-serif;fill:#8fa1b3">CONTACTS</text>`;
+    const cx = x + 200;
+    s += `<rect x="${cx - 24}" y="${y + 14}" width="48" height="${h - 28}" rx="8" fill="#3a4048" stroke="#10151a"/>`;
+    for (let yy = y + 26; yy < y + h - 22; yy += 6) s += `<line x1="${cx - 18}" y1="${yy}" x2="${cx + 18}" y2="${yy}" stroke="#b4691f" stroke-width="3"/>`;
+    s += `<rect class="coilglow" data-k="${k}" x="${cx - 24}" y="${y + 14}" width="48" height="${h - 28}" rx="8" fill="#38e08a" opacity="0" style="transition:opacity .25s;pointer-events:none"/>`;
+    s += `<text x="${cx}" y="${y + 82}" text-anchor="middle" style="font:700 9px sans-serif;fill:#f3f6f9;paint-order:stroke;stroke:#000;stroke-width:3px">COIL</text>`;
+    const px = x + 70, py = y + 30, L = 58;
+    const dirs = [[-40, 70], [40, 70]].map(([dx, dy]) => { const n = Math.hypot(dx, dy); return [dx / n, dy / n]; });
+    const [nc, no] = dirs;
+    s += [nc, no].map(d => `<circle cx="${px + d[0] * L}" cy="${py + d[1] * L}" r="6" fill="url(#ptMetal)" stroke="#3d4650"/>`).join('');
+    const rot = (Math.atan2(no[1], no[0]) - Math.atan2(nc[1], nc[0])) * 180 / Math.PI;
+    const ex = px + nc[0] * (L - 4), ey = py + nc[1] * (L - 4);
+    s += `<g class="rblade" data-k="${k}" data-rot="${rot.toFixed(1)}" style="transform-origin:${px}px ${py}px;transition:transform .2s"><line x1="${px}" y1="${py}" x2="${ex}" y2="${ey}" stroke="url(#ptBrass)" stroke-width="7" stroke-linecap="round"/><circle cx="${ex}" cy="${ey}" r="4" fill="#e8e8e8" stroke="#555"/></g>`;
+    s += `<circle cx="${px}" cy="${py}" r="7" fill="#c9953a" stroke="#5c3f10"/>`;
+    return s;
+  },
+  /* small round capacitor */
+  roundCap(x, y, w, h) { return PT.can(x, y, w, h, '10 µF', '370 VAC'); },
+  /* copper ground lug on a bolt */
+  ground(x, y) { return `<rect x="${x - 28}" y="${y - 12}" width="56" height="24" rx="4" fill="url(#ptCopper)" stroke="#4a2410"/><circle cx="${x - 20}" cy="${y}" r="4" fill="#3a4048"/>`; },
+  /* belly-band crankcase heater: flexible black silicone band with seams, a leaf-spring clamp at one end and short black leads at the other */
+  band(x, y, w, h) {
+    const cy = y + h / 2, bx = x + 22, bw = w - 22 - 54, id = 'ptBand' + Math.round(x + y);
+    let s = `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4b535c"/><stop offset=".25" stop-color="#2a3036"/><stop offset=".7" stop-color="#14181c"/><stop offset="1" stop-color="#2b3238"/></linearGradient></defs>`;
+    // leads out of the left end
+    s += `<path d="M${x + 4} ${cy} H${bx + 6}" stroke="#0b0e11" stroke-width="7" stroke-linecap="round"/><path d="M${x + 4} ${cy} H${bx + 6}" stroke="#3a434c" stroke-width="2" stroke-linecap="round"/>`;
+    s += `<rect x="${bx - 8}" y="${cy - 9}" width="22" height="18" rx="5" fill="#1d2329" stroke="#0b0e11"/>`;
+    // the band
+    s += `<rect x="${bx}" y="${y + 2}" width="${bw}" height="${h - 4}" rx="7" fill="url(#${id})" stroke="#0b0e11" stroke-width="2"/>`;
+    for (let xx = bx + 18; xx < bx + bw - 6; xx += 13) s += `<line x1="${xx}" y1="${y + 6}" x2="${xx}" y2="${y + h - 6}" stroke="#5a636c" stroke-width="1.3" opacity=".45"/>`;
+    s += `<rect x="${bx + 4}" y="${y + 6}" width="${bw - 8}" height="4" rx="2" fill="#7b858f" opacity=".35"/>`;
+    // spring clamp at the right end
+    const sx = bx + bw;
+    s += `<rect x="${sx - 4}" y="${y - 1}" width="14" height="${h + 2}" rx="3" fill="url(#ptMetalV)" stroke="#3d4650"/>`;
+    let sp = `M${sx + 10} ${cy}`;
+    for (let i = 0; i < 6; i++) sp += ` l5 ${i % 2 ? 9 : -9} l0 0`;
+    s += `<path d="M${sx + 10} ${cy} l5 -9 l5 18 l5 -18 l5 18 l5 -18 l5 18 l5 -9" fill="none" stroke="#aeb9c3" stroke-width="2.6" stroke-linejoin="round"/>`;
+    s += `<path d="M${sx + 40} ${cy} H${x + w - 4}" stroke="#0b0e11" stroke-width="7" stroke-linecap="round"/><path d="M${sx + 40} ${cy} H${x + w - 4}" stroke="#3a434c" stroke-width="2" stroke-linecap="round"/>`;
+    s += `<circle cx="${sx + 40}" cy="${cy}" r="5" fill="url(#ptMetalV)" stroke="#3d4650"/>`;
+    return s;
+  },
+  /* DIN-rail module (phase monitor, lead/lag board) */
+  module(x, y, w, h, color) {
+    let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="${color || '#e7ebee'}" stroke="#7d8892" stroke-width="2"/>`;
+    s += `<rect x="${x + 8}" y="${y + 8}" width="${w - 16}" height="16" rx="3" fill="#20262c"/><circle cx="${x + 20}" cy="${y + 16}" r="3" fill="#37d67a"/><circle cx="${x + 34}" cy="${y + 16}" r="3" fill="#f5c400"/>`;
+    return s;
+  },
+  /* green PCB (lead/lag board) with mounting holes, traces and a couple of chips */
+  board(x, y, w, h) {
+    const t = (tx, ty, str, sz, col, anc) => `<text x="${tx}" y="${ty}" text-anchor="${anc || 'start'}" style="font:700 ${sz || 9}px sans-serif;fill:${col || '#e9efe9'};letter-spacing:.06em">${str}</text>`;
+    let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="#17543a" stroke="#0a2a1c" stroke-width="2"/>`;
+    s += `<rect x="${x + 3}" y="${y + 3}" width="${w - 6}" height="${h - 6}" rx="4" fill="none" stroke="#2c7a56" stroke-width="1" opacity=".7"/>`;
+    [[x + 12, y + 12], [x + w - 12, y + 12], [x + 12, y + h - 12], [x + w - 12, y + h - 12]].forEach(([cx, cy]) => { s += `<circle cx="${cx}" cy="${cy}" r="6" fill="#0e1a12" stroke="#c9d3cc" stroke-width="1.5"/><circle cx="${cx}" cy="${cy}" r="9" fill="none" stroke="#c9a24a" stroke-width="1" opacity=".6"/>`; });
+    /* traces */
+    s += `<path d="M${x + 60} ${y + 60} V${y + 100} H${x + 120} M${x + 160} ${y + 60} V${y + 92} H${x + 170} M${x + 260} ${y + 70} V${y + 118} M${x + 360} ${y + 70} V${y + 118} M${x + 40} ${y + 140} H${x + 200} M${x + 120} ${y + 150} H${x + 230} V${y + 128}" fill="none" stroke="#3f9a6e" stroke-width="2.5" opacity=".7"/>`;
+    /* input terminal block (R C Y1 Y2) */
+    s += `<rect x="${x + 22}" y="${y + 5}" width="${w - 44 - 60}" height="32" rx="5" fill="#2b6fb0" stroke="#10304f" stroke-width="1.5"/><rect x="${x + 22}" y="${y + 5}" width="${w - 104}" height="8" rx="3" fill="#4f93d1" opacity=".6"/>`;
+    for (let k = 0; k < 4; k++) s += `<line x1="${x + 98 + k * 100}" y1="${y + 8}" x2="${x + 98 + k * 100}" y2="${y + 34}" stroke="#10304f" stroke-width="1.5"/>`;
+    /* output terminal block (OUT 1, OUT 2) */
+    s += `<rect x="${x + 198}" y="${y + 96}" width="200" height="30" rx="5" fill="#d9dde1" stroke="#7b848c" stroke-width="1.5"/>`;
+    s += `<line x1="${x + 298}" y1="${y + 99}" x2="${x + 298}" y2="${y + 123}" stroke="#7b848c" stroke-width="1.5"/>`;
+    /* microcontroller */
+    const mx = x + 36, my = y + 78;
+    s += `<rect x="${mx}" y="${my}" width="64" height="40" rx="3" fill="url(#ptBlack)" stroke="#0b0e11"/><circle cx="${mx + 8}" cy="${my + 8}" r="2.5" fill="#6b7886"/>`;
+    for (let k = 0; k < 8; k++) s += `<line x1="${mx + 6 + k * 7.5}" y1="${my - 5}" x2="${mx + 6 + k * 7.5}" y2="${my}" stroke="#c9d3cc" stroke-width="2"/><line x1="${mx + 6 + k * 7.5}" y1="${my + 40}" x2="${mx + 6 + k * 7.5}" y2="${my + 45}" stroke="#c9d3cc" stroke-width="2"/>`;
+    s += t(mx + 32, my + 28, 'CTRL', 8, '#9aa6b2', 'middle');
+    /* crystal, delay pot, DIP bank, LEDs */
+    s += `<rect x="${x + 112}" y="${y + 90}" width="22" height="12" rx="6" fill="url(#ptMetal)" stroke="#3d4650"/>`;
+    s += `<rect x="${x + 112}" y="${y + 140}" width="46" height="26" rx="3" fill="#2d6bb0" stroke="#10304f"/><circle cx="${x + 135}" cy="${y + 153}" r="9" fill="url(#ptBrass)" stroke="#5c3f10"/><line x1="${x + 135}" y1="${y + 153}" x2="${x + 141}" y2="${y + 147}" stroke="#3a2a10" stroke-width="2"/>`;
+    s += t(x + 135, y + h - 4, 'DELAY', 8, '#e9efe9', 'middle');
+    s += `<rect x="${x + 40}" y="${y + 138}" width="52" height="26" rx="2" fill="#d6b43c" stroke="#7d6510"/>`;
+    for (let k = 0; k < 4; k++) s += `<rect x="${x + 46 + k * 11}" y="${y + 143 + (k % 2) * 8}" width="8" height="10" rx="1" fill="#f4f6f8" stroke="#7d6510"/>`;
+    s += t(x + 66, y + h - 4, 'SW1', 8, '#e9efe9', 'middle');
+    s += `<circle cx="${x + 190}" cy="${y + 108}" r="4.5" fill="#38e08a" stroke="#0a2a1c"/><circle cx="${x + 190}" cy="${y + 124}" r="4.5" fill="#e8c24a" stroke="#0a2a1c"/>`;
+    s += t(x + 178, y + 111, 'PWR', 7, '#e9efe9', 'end') + t(x + 178, y + 127, 'CALL', 7, '#e9efe9', 'end');
+    /* output relays and diodes near outputs */
+    s += `<rect x="${x + 410}" y="${y + 70}" width="30" height="42" rx="3" fill="#2e86c9" stroke="#0e2a4f"/><rect x="${x + 410}" y="${y + 122}" width="30" height="42" rx="3" fill="#2e86c9" stroke="#0e2a4f"/>`;
+    s += t(x + 425, y + 95, 'K1', 8, '#fff', 'middle') + t(x + 425, y + 147, 'K2', 8, '#fff', 'middle');
+    s += `<rect x="${x + 216}" y="${y + 150}" width="30" height="8" rx="3" fill="#2b2b2b" stroke="#000"/><rect x="${x + 222}" y="${y + 150}" width="4" height="8" fill="#c9d3cc"/>`;
+    s += t(x + w - 10, y + h - 6, 'LEAD / LAG CONTROL', 8, '#bfe6cf', 'end');
+    return s;
+  }
+};
+
 /* ---- levels.js ---- */
-/* ===== Twenty service calls, from the basics to compound faults. Tickets are in the customer's words and never name the part.
+/* ===== Twenty-two service calls, from the basics to compound faults. Tickets are in the customer's words and never name the part.
    cust: answers to the questions in "Talk to the customer". pre: seconds the boiler ran before you arrived. resets: times the
    customer already pushed the reset button. ===== */
-const RANKS = ['Apprentice', 'Apprentice', 'Apprentice', 'Apprentice', 'Apprentice', 'Journeyman', 'Journeyman', 'Journeyman', 'Journeyman', 'Journeyman',
-  'Journeyman', 'Journeyman', 'Journeyman', 'Journeyman', 'Senior tech', 'Senior tech', 'Senior tech', 'Senior tech', 'Senior tech', 'Senior tech'];
 const LEVELS = [
   { id: 1, title: 'Dead quiet', site: 'Bldg 114, Motor Pool office', faults: ['fuse_open'], par: 6,
     ticket: 'Nothing is running in the boiler room. No lights on the boiler, no hum, nothing. The offices are getting cold.',
     cust: { when: 'Sometime overnight. It was fine at close of business.', work: 'Nobody has touched it in months.', lights: 'No lights at all on the burner panel. Usually there is a green one.', noise: 'It is completely silent in there.' },
     hints: ['Start at the disconnect. Is there 120 V on the line side and the load side?', 'Follow L1 into the panel. Read across the control fuse with the power on.', 'Voltage across a fuse with the power on means the fuse is open. Confirm with ohms, power off.'] },
-  { id: 2, title: 'Pump will not start', site: 'Bldg 207, Dental Clinic', faults: ['pr_coil'], par: 8,
+  { id: 2, title: 'Pump will not start', site: 'Bldg 207, Dental Clinic', faults: ['ps_coil'], par: 8,
     ticket: 'The boiler is not firing and the pipes in the mechanical room are cold. The building controls show heat is on.',
     cust: { when: 'This morning. The front desk noticed the cold first.', work: 'No work done.', lights: 'The burner display just says STANDBY.', noise: 'Very quiet. Usually you can hear the pump.' },
-    hints: ['The burner waits for the flow switch, and the flow switch waits for the pump. Is the pump running?', 'Check for 120 V across the pump relay coil, then across its contacts.', 'Coil has 120 V across it but the contacts never close: ohm the coil with the power off.'] },
+    hints: ['The burner waits for the flow switch, and the flow switch waits for the pump. Is the pump running?', 'Check for 120 V across the pump starter coil (A to B), then 208 V on its line and load sides.', 'Coil has 120 V across it but the starter never pulls in: ohm the coil with the power off.'] },
   { id: 3, title: 'Pump runs, burner waits', site: 'Bldg 31, Chapel annex', faults: ['oc_bad'], par: 8,
     ticket: 'The pump is running but the boiler never lights. The water gauge says it is barely warm.',
     cust: { when: 'Two days ago it started taking longer to warm up, then today it just stopped heating.', work: 'Nobody has been in there.', lights: 'The screen on the burner says STANDBY.', noise: 'Just the pump.' },
@@ -484,7 +874,11 @@ const LEVELS = [
   { id: 9, title: 'Hot smell from the burner', site: 'Bldg 405, Clinic', faults: ['blower_open'], par: 9, resets: 1,
     ticket: 'There was a hot electrical smell near the burner and now it has an alarm light. We did not touch anything else.',
     cust: { when: 'Around noon.', work: 'No work done.', lights: 'Red alarm light.', noise: 'It was humming loud before it quit. Now it is quiet.' },
-    hints: ['During prepurge, is the blower turning?', 'Read terminal 3 to neutral, then across the blower motor leads.', 'Voltage is there and the motor does not run: ohm the motor, power off.'] },
+    hints: ['During prepurge, is the blower turning? Listen to it.', 'With M1 pulled in, read 208 V across each pair of blower motor leads (T1-T2, T2-T3, T3-T1).', 'All three legs are there and the motor only hums: ohm each pair of windings with the power off. They should all match.'] },
+  { id: 21, title: 'Fan never comes on', site: 'Bldg 66, Vehicle maintenance', faults: ['m1_coil'], par: 9, resets: 1,
+    ticket: 'The boiler clicks, waits a bit and then the red alarm light comes on. We never hear the burner fan.',
+    cust: { when: 'This morning.', work: 'No.', lights: 'Red alarm light. The screen says lockout, something about interlock.', noise: 'A click from the panel, then nothing. No fan.' },
+    hints: ['During prepurge the relay module sends 120 V out of terminal 3 to start the blower. Does it get there?', 'Read across the M1 coil, A to B, during prepurge. Does the contactor pull in?', '120 V on the coil and the contactor never pulls in: ohm the coil with the power off.'] },
   { id: 10, title: 'Pilot lights, main does not', site: 'Bldg 77, Dining facility', faults: ['v1_open'], par: 10, resets: 1,
     ticket: 'The boiler lights a little flame, then shuts down with an alarm. The kitchen needs hot water for the noon meal.',
     cust: { when: 'Since breakfast.', work: 'No.', lights: 'Red alarm. Something about main flame.', noise: 'A puff of a start, then it goes off.' },
@@ -497,6 +891,10 @@ const LEVELS = [
     ticket: 'The boiler says low water, but the pressure gauge looks normal. We added water anyway and nothing changed.',
     cust: { when: 'Yesterday.', work: 'We opened the water feed for a minute. The gauge went a little higher.', lights: 'LOW WATER light on.', noise: 'Pump runs. Burner never starts.' },
     hints: ['Is the boiler really low? Check the pressure gauge against the cold fill pressure.', 'Measure across the low-water cutoff contacts.', 'A probe senses water by conducting through it. What happens when it is coated?'] },
+  { id: 22, title: 'Pump keeps tripping', site: 'Bldg 12, Transportation office', faults: ['fuse_L3'], par: 10, pre: 200,
+    ticket: 'The pump stopped and there is no heat. Our maintenance guy pushed a reset button on the pump starter and it hummed and stopped again.',
+    cust: { when: 'After a thunderstorm last night.', work: 'Our maintenance guy pushed the reset on the pump starter this morning.', lights: 'Screen says STANDBY.', noise: 'When he reset it the pump just hummed loud for a few seconds, then clicked off.' },
+    hints: ['A 3-phase motor that hums and will not turn is usually missing a leg. Check all three legs.', 'Read L1-L2, L2-L3 and L3-L1 at the line side of the disconnect, then after each fuse.', 'One leg reads about half voltage after its fuse: that is back-feed through the motor windings, not real power. Ohm the fuse with the power off. Then reset the overload.'] },
   { id: 13, title: 'Pump hums along, no heat', site: 'Bldg 115, Training center', faults: ['coupler'], par: 9,
     ticket: 'We hear the pump motor running, but the boiler will not fire and the building is cold.',
     cust: { when: 'This morning after the weekend.', work: 'No.', lights: 'Screen says STANDBY.', noise: 'The pump sounds louder than normal. Kind of a rattle.' },
@@ -530,96 +928,197 @@ const LEVELS = [
     cust: { when: 'The noise started this morning.', work: 'Another contractor came out last night. He said he got it running and would come back for parts.', lights: 'There is a LOW WATER light on, but the boiler is running anyway.', noise: 'Banging and rumbling like a kettle.' },
     hints: ['The LOW WATER light is on but the burner runs. How can that be?', 'Look at the low-water cutoff terminals in the cabinet.', 'Never leave a safety jumped. Fix the reason it tripped, then remove the jumper.'] }
 ];
-LEVELS.forEach((l, i) => { l.rank = RANKS[i]; l.n = i + 1; });
+LEVELS.forEach((l, i) => { l.n = i + 1; l.rank = l.n <= 5 ? 'Apprentice' : l.n <= 15 ? 'Journeyman' : 'Senior tech'; });
 
 /* ---- panel.js ---- */
-/* ===== Boiler control panel: every probe point the meter can touch, grouped the way the cabinet is laid out ===== */
-const PANEL_W = 1100, PANEL_H = 1660;
-const TPOS = {};
-const NAV = [['Power', 0], ['Pump', 250], ['Limit string', 500], ['Interlocks', 790], ['Flame safeguard', 1010], ['Burner loads', 1330]];
+/* ===== Boiler control panel: every probe point the meter can touch, drawn with the same part artwork (ptdraw.js) as the
+   package unit game. Art goes behind; brass lugs sit under every terminal dot; wires (toggle) on top of the art. ===== */
+const PANEL_W = 1120, PANEL_H = 2110;
+let TPOS = {};
+const NAV = [['Power', 0], ['Motor starters', 360], ['Limit string', 1075], ['Interlocks', 1285], ['Flame safeguard', 1495], ['Burner loads', 1875]];
 const TLBL = {
-  LN_L1: 'L1', LN_N: 'N', DS_L1: 'L1', F1_IN: 'IN', F1_OUT: 'OUT', NB: 'N', GND: 'G', EN_1: '1', EN_2: '2',
-  PR_A: 'A', PR_B: 'B', PR_C: 'C', PR_NO: 'NO', PM_1: '1', PM_2: '2',
-  BS_1: '1', BS_2: '2', OC_1: '1', OC_2: '2', HL_1: '1', HL_2: '2', LW_1: '1', LW_2: '2', FS_1: '1', FS_2: '2',
+  LN_L1: 'L1', LN_L2: 'L2', LN_L3: 'L3', F1_IN: 'F1', F2_IN: 'F2', F3_IN: 'F3', F1_OUT: 'F1', F2_OUT: 'F2', F3_OUT: 'F3',
+  XF_H1: 'H1', XF_H2: 'H2', XF_X1: 'X1', XF_X2: 'X2', FU_IN: 'IN', FU_OUT: 'OUT', NB: 'N', GND: 'GND',
+  M1_L1: 'L1', M1_L2: 'L2', M1_L3: 'L3', M1_T1: 'T1', M1_T2: 'T2', M1_T3: 'T3', M1_A: 'A', M1_B: 'B',
+  BM_T1: 'T1', BM_T2: 'T2', BM_T3: 'T3', PS_L1: 'L1', PS_L2: 'L2', PS_L3: 'L3', PS_T1: 'T1', PS_T2: 'T2', PS_T3: 'T3', PS_A: 'A', PS_B: 'B',
+  OL_95: '95', OL_96: '96', PM_T1: 'T1', PM_T2: 'T2', PM_T3: 'T3', EN_1: '1', EN_2: '2', AL_1: '1', AL_2: '2', BS_1: '1', BS_2: '2',
+  OC_1: '1', OC_2: '2', HL_1: '1', HL_2: '2', LW_1: '1', LW_2: '2', FS_1: '1', FS_2: '2',
   LG_1: 'C', LG_2: 'NO', HG_1: 'C', HG_2: 'NC', AP_1: 'C', AP_2: 'NO',
   RM_L1: 'L1', RM_L2: 'L2', RM_3: '3', RM_4: '4', RM_6: '6', RM_7: '7', RM_8: '8', RM_9: '9', RM_10: '10', FT_P: '+', FT_N: '−',
-  BM_1: '1', BM_2: '2', AL_1: '1', AL_2: '2', PV_1: '1', PV_2: '2', V1_1: '1', V1_2: '2', V2_1: '1', V2_2: '2', IG_1: '1', IG_2: '2'
+  PV_1: '1', PV_2: '2', V1_1: '1', V1_2: '2', V2_1: '1', V2_2: '2', IG_1: '1', IG_2: '2'
 };
-function term(id, x, y, lblPos) {
-  TPOS[id] = [x, y];
-  const ly = lblPos === 'b' ? y + 30 : y - 16;
-  return `<g class="term" data-id="${id}" tabindex="0" role="button" aria-label="${esc(NODES[id])}"><circle class="pad" cx="${x}" cy="${y}" r="22"/><circle class="hit" cx="${x}" cy="${y}" r="9"/><circle class="ring-r" cx="${x}" cy="${y}" r="15" style="display:none"/><circle class="ring-b" cx="${x}" cy="${y}" r="19" style="display:none"/><text x="${x}" y="${ly}" text-anchor="middle">${TLBL[id] || id}</text></g>`;
+/* terminal positions [id, x, y, label side: 'a' above (default below)] */
+const TERMS = [
+  ['LN_L1', 120, 122, 'r'], ['LN_L2', 240, 122, 'r'], ['LN_L3', 360, 122, 'r'], ['F1_IN', 120, 196, 'r'], ['F2_IN', 240, 196, 'r'], ['F3_IN', 360, 196, 'r'],
+  ['F1_OUT', 120, 304], ['F2_OUT', 240, 304], ['F3_OUT', 360, 304],
+  ['XF_H1', 570, 140, 'a'], ['XF_H2', 570, 270], ['XF_X1', 690, 140, 'a'], ['XF_X2', 690, 270],
+  ['FU_IN', 840, 190], ['FU_OUT', 890, 190], ['NB', 1030, 130], ['GND', 1030, 270],
+  ['M1_L1', 120, 475], ['M1_L2', 240, 475], ['M1_L3', 360, 475], ['M1_T1', 120, 605], ['M1_T2', 240, 605], ['M1_T3', 360, 605], ['M1_A', 420, 475], ['M1_B', 420, 605],
+  ['BM_T1', 560, 640], ['BM_T2', 630, 640], ['BM_T3', 700, 640],
+  ['EN_1', 870, 610], ['EN_2', 1030, 610],
+  ['PS_L1', 120, 795], ['PS_L2', 240, 795], ['PS_L3', 360, 795], ['PS_T1', 120, 925], ['PS_T2', 240, 925], ['PS_T3', 360, 925], ['PS_A', 420, 795], ['PS_B', 420, 925],
+  ['OL_95', 320, 1000], ['OL_96', 410, 1000],
+  ['PM_T1', 560, 985], ['PM_T2', 630, 985], ['PM_T3', 700, 985],
+  ['AL_1', 870, 830], ['AL_2', 1030, 830], ['BS_1', 870, 1020], ['BS_2', 1030, 1020],
+  ['OC_1', 85, 1220], ['OC_2', 245, 1220], ['HL_1', 350, 1220], ['HL_2', 510, 1220], ['LW_1', 615, 1220], ['LW_2', 775, 1220], ['FS_1', 880, 1220], ['FS_2', 1040, 1220],
+  ['LG_1', 100, 1430], ['LG_2', 300, 1430], ['HG_1', 460, 1430], ['HG_2', 660, 1430], ['AP_1', 820, 1430], ['AP_2', 1020, 1430],
+  ['FT_P', 960, 1640], ['FT_N', 1040, 1640],
+  ['RM_L1', 120, 1790, 'ad'], ['RM_L2', 225, 1790, 'ad'], ['RM_3', 330, 1790, 'ad'], ['RM_4', 435, 1790, 'ad'], ['RM_6', 540, 1790, 'ad'], ['RM_7', 645, 1790, 'ad'], ['RM_8', 750, 1790, 'ad'], ['RM_9', 855, 1790, 'ad'], ['RM_10', 960, 1790, 'ad'],
+  ['IG_1', 85, 2030], ['IG_2', 245, 2030], ['PV_1', 350, 2030], ['PV_2', 510, 2030], ['V1_1', 615, 2030], ['V1_2', 775, 2030], ['V2_1', 880, 2030], ['V2_2', 1040, 2030]
+];
+TERMS.forEach(t => { TPOS[t[0]] = [t[1], t[2]]; });
+
+function pbox(x, y, w, h, t, s) {
+  return `<rect class="box" x="${x}" y="${y}" width="${w}" height="${h}" rx="8"/><text class="boxlabel" x="${x + 16}" y="${y + 30}">${t}</text>` + (s ? `<text class="sub" x="${x + 16}" y="${y + 52}">${s}</text>` : '');
 }
-function box(x, y, w, h, label, sub) {
-  return `<rect class="box" x="${x}" y="${y}" width="${w}" height="${h}" rx="6"/><text class="boxlabel" x="${x + 12}" y="${y + 24}">${label}</text>` + (sub ? `<text class="sub" x="${x + 12}" y="${y + 44}">${sub}</text>` : '');
-}
-function sect(y, label) { return `<text x="20" y="${y}" style="font:700 13px var(--head);letter-spacing:.16em;fill:var(--yellow);text-transform:uppercase">${label}</text><line x1="20" x2="1080" y1="${y + 8}" y2="${y + 8}" stroke="#33414f"/>`; }
-function twoTermDevice(x, y, w, label, sub, a, b, glyph) {
-  return box(x, y, w, 150, label, sub) + (glyph || '') + term(a, x + 40, y + 115, 'b') + term(b, x + w - 40, y + 115, 'b');
-}
-/* small drawings inside the boxes (no faults are ever shown here) */
-const G_SW = (x, y) => `<path d="M${x} ${y} h18 l26 -14 M${x + 50} ${y} h18" stroke="#b9c6d3" stroke-width="2.5" fill="none"/>`;
-const G_COIL = (x, y) => `<rect x="${x}" y="${y - 12}" width="60" height="24" rx="4" fill="#4a3a1e" stroke="#b9873a"/><path d="M${x + 6} ${y} q5 -9 10 0 t10 0 t10 0 t10 0 t10 0" stroke="#e8a33b" fill="none"/>`;
-const G_MOTOR = (x, y, key) => `<circle cx="${x}" cy="${y}" r="26" fill="#2b3642" stroke="#6a7d90" stroke-width="2"/><g class="spin" data-fan="${key}" style="transform-origin:${x}px ${y}px"><path d="M${x} ${y - 20} L${x} ${y + 20} M${x - 20} ${y} L${x + 20} ${y}" stroke="#9fb1c3" stroke-width="4"/></g><text x="${x}" y="${y + 44}" text-anchor="middle" class="sub">M</text>`;
+function psect(y, label) { return `<text x="24" y="${y}" style="font:700 13px var(--head);letter-spacing:.16em;fill:var(--yellow);text-transform:uppercase">${label}</text>`; }
+
+/* boiler parts not in the package unit set, drawn in the same style */
+const BX = {
+  /* cartridge fuse in a black holder between an in and an out lug */
+  cartridge(x, y1, y2, amps) {
+    const h = y2 - y1;
+    return `<rect x="${x - 6}" y="${y1}" width="12" height="40" fill="url(#ptBrass)" stroke="#5c3f10"/><rect x="${x - 6}" y="${y2 - 40}" width="12" height="40" fill="url(#ptBrass)" stroke="#5c3f10"/>` +
+      `<rect x="${x - 28}" y="${y1 + 22}" width="56" height="${h - 44}" rx="7" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/>` +
+      `<rect x="${x - 15}" y="${y1 + h / 2 - 24}" width="30" height="48" fill="url(#ptBeige)" stroke="#8d8672"/><rect x="${x - 17}" y="${y1 + h / 2 - 28}" width="34" height="10" rx="3" fill="url(#ptBrass)" stroke="#5c3f10"/><rect x="${x - 17}" y="${y1 + h / 2 + 18}" width="34" height="10" rx="3" fill="url(#ptBrass)" stroke="#5c3f10"/>` +
+      `<text x="${x}" y="${y1 + h / 2 + 4}" text-anchor="middle" style="font:700 9px sans-serif;fill:#3a3a3a">${amps}</text>`;
+  },
+  /* disconnect switch blades between the line lugs and the fuse lugs */
+  blades(xs, y1, y2) {
+    let s = `<rect x="${xs[0] - 40}" y="${y1 - 22}" width="${xs[xs.length - 1] - xs[0] + 80}" height="${y2 - y1 + 44}" rx="8" fill="#20262c" stroke="#0b0e11" stroke-width="2"/>`;
+    xs.forEach(x => { s += `<rect x="${x - 5}" y="${y1 + 10}" width="10" height="${y2 - y1 - 20}" rx="3" fill="url(#ptMetal)" stroke="#3d4650"/>`; });
+    s += `<rect x="${xs[0] - 30}" y="${(y1 + y2) / 2 - 6}" width="${xs[xs.length - 1] - xs[0] + 60}" height="12" rx="5" fill="#b3302a" stroke="#6e1712"/>`;
+    return s;
+  },
+  /* overload relay block hung under a starter, with a blue reset button and the 95-96 contact */
+  overload(x, y, w) {
+    return `<rect x="${x}" y="${y}" width="${w}" height="64" rx="8" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/><rect x="${x + 8}" y="${y + 8}" width="${w - 16}" height="12" rx="3" fill="#2d343b"/>` +
+      `<circle cx="${x + 60}" cy="${y + 38}" r="15" fill="url(#ptBlue)" stroke="#0e2a4f" stroke-width="2"/><text x="${x + 60}" y="${y + 42}" text-anchor="middle" style="font:800 9px sans-serif;fill:#fff">RESET</text>` +
+      `<rect x="${x + 96}" y="${y + 26}" width="54" height="22" rx="4" fill="#d9dde1" stroke="#7b848c"/><text x="${x + 123}" y="${y + 41}" text-anchor="middle" style="font:700 10px sans-serif;fill:#20262c">OL 2–4 A</text>`;
+  },
+  /* aquastat / high limit: beige case with a setpoint dial (high limit adds a red manual reset button) */
+  aquastat(x, y, w, set, reset) {
+    let s = `<rect x="${x}" y="${y}" width="${w}" height="70" rx="8" fill="url(#ptBeige)" stroke="#8d8672" stroke-width="2"/>`;
+    s += `<circle cx="${x + 46}" cy="${y + 35}" r="24" fill="#f4f6f8" stroke="#6b7480" stroke-width="2"/><line x1="${x + 46}" y1="${y + 35}" x2="${x + 60}" y2="${y + 22}" stroke="#b3302a" stroke-width="3"/><circle cx="${x + 46}" cy="${y + 35}" r="3" fill="#333"/>`;
+    s += `<text x="${x + 46}" y="${y + 66}" text-anchor="middle" style="font:700 9px sans-serif;fill:#3a434c">${set}</text>`;
+    if (reset) s += `<circle cx="${x + w - 34}" cy="${y + 35}" r="13" fill="#c33" stroke="#6e1712" stroke-width="2"/><text x="${x + w - 34}" y="${y + 60}" text-anchor="middle" style="font:700 8px sans-serif;fill:#6e1712">RESET</text>`;
+    else s += `<path d="M${x + 90} ${y + 52} q10 -30 20 0 q10 30 20 0" fill="none" stroke="#6b7480" stroke-width="2"/>`;
+    return s;
+  },
+  /* probe low-water cutoff: grey control with its LOW WATER and POWER lamps (lamps are live, like the real one) */
+  lwco(x, y, w) {
+    return `<rect x="${x}" y="${y}" width="${w}" height="70" rx="8" fill="#aab4be" stroke="#4a525b" stroke-width="2"/><rect x="${x + 10}" y="${y + 10}" width="${w - 20}" height="18" rx="3" fill="#20262c"/>` +
+      `<text x="${x + 18}" y="${y + 23}" style="font:700 9px sans-serif;fill:#cfd8e0">LOW WATER CUTOFF</text>` +
+      `<circle id="pnlLwLamp" cx="${x + 40}" cy="${y + 48}" r="8" fill="#3a2a1a" stroke="#222"/><text x="${x + 54}" y="${y + 52}" style="font:700 9px sans-serif;fill:#20262c">LOW WATER</text>` +
+      `<rect x="${x + w - 44}" y="${y + 40}" width="30" height="16" rx="4" fill="#c33" stroke="#6e1712"/><text x="${x + w - 29}" y="${y + 51}" text-anchor="middle" style="font:800 7px sans-serif;fill:#fff">TEST</text>`;
+  },
+  /* paddle flow switch on a pipe tee */
+  flowsw(x, y, w) {
+    return `<rect x="${x}" y="${y + 40}" width="${w}" height="26" rx="6" fill="url(#ptMetalV)" stroke="#3d4650"/><rect x="${x + w / 2 - 34}" y="${y}" width="68" height="44" rx="6" fill="#2d6a9f" stroke="#173f6b" stroke-width="2"/>` +
+      `<path d="M${x + w / 2} ${y + 66} v12 l18 10" stroke="#c9d3dd" stroke-width="4" fill="none"/><text x="${x + w / 2}" y="${y + 26}" text-anchor="middle" style="font:800 10px sans-serif;fill:#fff">FLOW</text>`;
+  },
+  /* round diaphragm pressure switch (gas or air) with a manual reset where it has one */
+  dswitch(cx, cy, col, label, note) {
+    let s = `<circle cx="${cx}" cy="${cy}" r="36" fill="#3b4652" stroke="#1d242b" stroke-width="3"/><circle cx="${cx}" cy="${cy}" r="29" fill="${col}" stroke="#0e2a4f" stroke-width="2"/>`;
+    s += `<text x="${cx}" y="${cy - 2}" text-anchor="middle" style="font:800 11px sans-serif;fill:#fff;paint-order:stroke;stroke:#0e2a4f;stroke-width:2px">${label}</text><text x="${cx}" y="${cy + 12}" text-anchor="middle" style="font:700 9px sans-serif;fill:#fff;paint-order:stroke;stroke:#0e2a4f;stroke-width:2px">${note}</text>`;
+    s += `<rect x="${cx - 7}" y="${cy + 34}" width="14" height="10" fill="url(#ptBrass)" stroke="#5c3f10"/>`;
+    if (/MR/.test(note)) s += `<circle cx="${cx + 30}" cy="${cy - 24}" r="8" fill="#c33" stroke="#6e1712" stroke-width="2"/>`;
+    return s;
+  },
+  /* toggle switch on a plate */
+  toggle(cx, cy) {
+    return `<rect x="${cx - 40}" y="${cy - 34}" width="80" height="68" rx="6" fill="#d9dde1" stroke="#7b848c" stroke-width="2"/><circle cx="${cx}" cy="${cy}" r="14" fill="url(#ptMetal)" stroke="#3d4650"/><rect x="${cx - 4}" y="${cy - 30}" width="8" height="30" rx="4" fill="url(#ptMetalV)" stroke="#3d4650"/>` +
+      `<text x="${cx}" y="${cy + 30}" text-anchor="middle" style="font:700 8px sans-serif;fill:#20262c">ON / OFF</text>`;
+  },
+  /* solenoid coil (pilot valve) */
+  solenoid(cx, cy) {
+    return `<rect x="${cx - 34}" y="${cy - 40}" width="68" height="70" rx="10" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/><rect x="${cx - 26}" y="${cy - 30}" width="52" height="30" rx="4" fill="#d9dde1"/><text x="${cx}" y="${cy - 11}" text-anchor="middle" style="font:700 9px sans-serif;fill:#20262c">120 V</text>` +
+      `<rect x="${cx - 12}" y="${cy + 30}" width="24" height="18" fill="url(#ptBrass)" stroke="#5c3f10"/>`;
+  },
+  /* motorized main gas valve actuator with OPEN/CLOSED window */
+  actuator(cx, cy, id) {
+    return `<rect x="${cx - 60}" y="${cy - 44}" width="120" height="80" rx="8" fill="#6d7c8b" stroke="#3d4955" stroke-width="2"/><rect x="${cx - 40}" y="${cy - 30}" width="80" height="22" rx="3" fill="#20262c"/>` +
+      `<text id="${id}" x="${cx}" y="${cy - 14}" text-anchor="middle" style="font:800 11px sans-serif;fill:#e5483b">CLOSED</text><rect x="${cx - 70}" y="${cy + 36}" width="140" height="8" rx="3" fill="#d4b73a" stroke="#7d6510"/>`;
+  },
+  /* ignition transformer with two porcelain HV posts */
+  ignx(cx, cy) {
+    return `<rect x="${cx - 62}" y="${cy - 34}" width="124" height="64" rx="6" fill="#3b4652" stroke="#1d242b" stroke-width="2"/><rect x="${cx - 40}" y="${cy - 56}" width="16" height="24" rx="6" fill="#efe9da" stroke="#8d8672"/><rect x="${cx + 24}" y="${cy - 56}" width="16" height="24" rx="6" fill="#efe9da" stroke="#8d8672"/>` +
+      `<rect x="${cx - 34}" y="${cy - 18}" width="68" height="26" rx="3" fill="#f1f3f5"/><text x="${cx}" y="${cy - 1}" text-anchor="middle" style="font:700 9px sans-serif;fill:#20262c">6000 V</text>`;
+  }
+};
 
 function buildPanel() {
-  let s = '';
+  let g = PT.defs + `<rect x="0" y="0" width="${PANEL_W}" height="${PANEL_H}" rx="10" fill="#1a222b"/>`;
   /* ---- power ---- */
-  s += sect(26, 'Power entry');
-  s += box(30, 44, 250, 180, 'Disconnect', '120 V, 1 phase') + term('LN_L1', 90, 120) + term('LN_N', 220, 120) + term('DS_L1', 90, 196, 'b');
-  s += `<text class="sub" x="122" y="124">LINE</text><text class="sub" x="122" y="200">LOAD</text>`;
-  s += box(310, 44, 150, 180, 'Fuse F1', '10 A') + `<rect x="368" y="126" width="34" height="46" rx="6" fill="#d9d2c0" stroke="#8a826e"/>` + term('F1_IN', 385, 112) + term('F1_OUT', 385, 192, 'b');
-  s += box(490, 44, 240, 80, 'Neutral bar', '') + term('NB', 680, 84);
-  s += box(490, 144, 240, 80, 'Ground lug', '') + term('GND', 680, 184);
-  s += box(760, 44, 310, 180, 'Heating call', 'Contact from the building controls') + G_SW(865, 150) + term('EN_1', 830, 150) + term('EN_2', 1000, 150);
-  /* ---- pump ---- */
-  s += sect(266, 'Pump circuit');
-  s += box(30, 284, 420, 190, 'Pump relay PR', '120 V coil, NO contact') + G_COIL(60, 380) + `<text class="sub" x="62" y="350">coil</text>` + G_SW(285, 380) + `<text class="sub" x="285" y="350">contact</text>`;
-  s += term('PR_A', 70, 440, 'b') + term('PR_B', 160, 440, 'b') + term('PR_C', 280, 440, 'b') + term('PR_NO', 400, 440, 'b');
-  s += box(480, 284, 340, 190, 'Pump motor', '3/4 hp, 120 V, 1 phase') + G_MOTOR(650, 370, 'pump') + term('PM_1', 540, 440, 'b') + term('PM_2', 760, 440, 'b');
+  g += pbox(40, 30, 420, 310, 'Fused disconnect', '208 V 3 phase · 15 A fuses') + BX.blades([120, 240, 360], 122, 196);
+  [120, 240, 360].forEach(x => { g += BX.cartridge(x, 198, 302, '15 A'); });
+  g += `<text class="sub" x="438" y="126" text-anchor="end" style="font-size:11px">LINE</text><text class="sub" x="438" y="200" text-anchor="end" style="font-size:11px">LOAD</text>`;
+  g += pbox(480, 30, 300, 310, 'Control transformer', '208 V in · 120 V out') + PT.xfmr(492, 100, 276, 210, 570, 690, 140, 270, '208 V', '120 V');
+  g += pbox(800, 30, 140, 240, 'Fuse FU4', '120 V, 3 A') + PT.fuse(840, 890, 190);
+  g += pbox(960, 30, 140, 310, 'Neutral', 'X2 bar · ground') + PT.tbar(990, 1070, 130) + PT.ground(1030, 270);
+  /* ---- motor starters ---- */
+  g += psect(370, 'Motor starters');
+  g += pbox(40, 380, 420, 300, 'Blower contactor M1', '') + PT.contactor(50, 432, 410, 216, [120, 240, 360], 475, 605, [420, 475, 605], 'm1');
+  g += pbox(480, 380, 300, 300, 'Burner blower', '3/4 hp, 208 V, 3 phase') + PT.wheel(630, 520, 64, 'blw') + PT.tbar(520, 740, 640);
+  g += pbox(800, 380, 300, 300, 'Heating call', 'Contact from building controls') + PT.module(820, 450, 260, 90, '#e7ebee') + PT.pswitch(870, 1030, 610, 'call');
+  g += pbox(40, 700, 420, 360, 'Pump starter', '') + PT.contactor(50, 752, 410, 216, [120, 240, 360], 795, 925, [420, 795, 925], 'ps') + BX.overload(60, 968, 390);
+  g += pbox(480, 700, 300, 360, 'Circulating pump', '1 hp, 208 V, 3 phase') + PT.motor(520, 790, 200, 110) + PT.tbar(520, 740, 985);
+  g += pbox(800, 700, 300, 170, 'Alarm light', 'Panel door, 120 V') + `<circle id="pnlAlarm" cx="950" cy="788" r="24" fill="#3a1d1a" stroke="#7a3a33" stroke-width="4"/>`;
+  g += pbox(800, 890, 300, 170, 'Burner switch', '') + BX.toggle(950, 972);
   /* ---- limit string ---- */
-  s += sect(516, 'Limit string (to relay module terminal 6)');
-  const lim = [['BS', 'Burner switch', 'ON / OFF'], ['OC', 'Operating', 'aquastat 180°F'], ['HL', 'High limit', '210°F, man. reset'], ['LW', 'Low-water', 'cutoff (probe)'], ['FS', 'Flow switch', 'paddle, ~20 gpm']];
-  lim.forEach((d, i) => { const x = 30 + i * 210; s += twoTermDevice(x, 534, 196, d[1], d[2], d[0] + '_1', d[0] + '_2', G_SW(x + 64, 610)); });
-  s += `<text class="sub" x="30" y="716">Left to right is the order the wire runs: burner switch → operating aquastat → high limit → low-water cutoff → flow switch → RM terminal 6.</text>`;
+  g += psect(1080, 'Limit string · burner switch → operating → high limit → low water → flow → RM 6');
+  g += pbox(40, 1090, 250, 170, 'Operating aquastat', '') + BX.aquastat(60, 1140, 210, '180°F');
+  g += pbox(305, 1090, 250, 170, 'High limit (MR)', '') + BX.aquastat(325, 1140, 210, '210°F', true);
+  g += pbox(570, 1090, 250, 170, 'Low-water cutoff', '') + BX.lwco(590, 1140, 210);
+  g += pbox(835, 1090, 250, 170, 'Flow switch', '') + BX.flowsw(855, 1132, 210);
   /* ---- interlocks ---- */
-  s += sect(806, 'Lockout interlocks (terminal 6 to terminal 7)');
-  const ilk = [['LG', 'Low gas press.', '3.5 in. w.c., man. reset'], ['HG', 'High gas press.', '5.0 in. w.c., man. reset'], ['AP', 'Air proving sw.', '0.5 in. w.c.']];
-  ilk.forEach((d, i) => { const x = 30 + i * 260; s += twoTermDevice(x, 824, 240, d[1], d[2], d[0] + '_1', d[0] + '_2', G_SW(x + 86, 900)); });
-  s += `<text class="sub" x="820" y="870">Order: terminal 6 →</text><text class="sub" x="820" y="890">low gas → high gas →</text><text class="sub" x="820" y="910">air switch → terminal 7</text>`;
+  g += psect(1290, 'Lockout interlocks · RM 6 → low gas → high gas → air switch → RM 7');
+  g += pbox(40, 1300, 340, 170, 'Low gas pressure', '') + BX.dswitch(200, 1378, 'url(#ptBlue)', 'LOW GAS', '3.5 in. MR');
+  g += pbox(400, 1300, 340, 170, 'High gas pressure', '') + BX.dswitch(560, 1378, '#b3302a', 'HIGH GAS', '5.0 in. MR');
+  g += pbox(760, 1300, 340, 170, 'Air proving switch', '') + BX.dswitch(920, 1378, '#6d7c8b', 'AIR', '0.5 in.');
   /* ---- relay module ---- */
-  s += sect(1026, 'Flame safeguard relay module (7800 series, on/off)');
-  s += box(30, 1044, 1040, 260, 'Relay module on its subbase', 'Keyboard display, plug-in flame amplifier, UV scanner on F and G');
-  s += `<rect x="560" y="1062" width="230" height="80" rx="6" fill="#0d1822" stroke="#25343f"/><text id="pnlKdm" x="675" y="1098" text-anchor="middle" style="font:700 16px var(--mono);fill:#7fd7ff">---</text><text id="pnlKdm2" x="675" y="1124" text-anchor="middle" style="font:12px var(--mono);fill:#7fd7ff"></text>`;
-  s += `<rect x="830" y="1062" width="210" height="80" rx="6" fill="#273340" stroke="#51657a"/><text class="sub" x="842" y="1082">Flame amplifier</text><text class="sub" x="842" y="1100">test jacks (V dc)</text>`;
-  s += term('FT_P', 940, 1124) + term('FT_N', 1000, 1124);
-  const rmT = ['RM_L1', 'RM_L2', 'RM_3', 'RM_4', 'RM_6', 'RM_7', 'RM_8', 'RM_9', 'RM_10'];
-  rmT.forEach((id, i) => { const x = 80 + i * 110; s += `<rect x="${x - 26}" y="1196" width="52" height="56" rx="4" fill="#1a222b" stroke="#51657a"/>` + term(id, x, 1236); });
-  s += `<text class="sub" x="54" y="1286">Subbase terminals. F and G (scanner) are not probe points; read the flame signal at the test jacks.</text>`;
+  g += psect(1500, 'Flame safeguard relay module (7800 series, on/off)');
+  g += pbox(40, 1510, 1060, 340, 'Relay module on its subbase', 'Keyboard display, plug-in flame amplifier, UV scanner on F and G');
+  g += `<rect x="70" y="1570" width="820" height="160" rx="10" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/><rect x="80" y="1580" width="800" height="14" rx="4" fill="#2d343b"/>`;
+  g += `<rect x="110" y="1610" width="330" height="96" rx="8" fill="#0d1822" stroke="#25343f" stroke-width="3"/><text id="pnlKdm" x="275" y="1650" text-anchor="middle" style="font:700 20px var(--mono);fill:#7fd7ff">---</text><text id="pnlKdm2" x="275" y="1680" text-anchor="middle" style="font:13px var(--mono);fill:#7fd7ff"></text>`;
+  ['POWER', 'PILOT', 'FLAME', 'MAIN', 'ALARM'].forEach((t, i) => { g += `<circle class="pled" data-led="${t}" cx="${490 + i * 76}" cy="1640" r="8" fill="#3b4652"/><text x="${490 + i * 76}" y="1668" text-anchor="middle" style="font:700 10px sans-serif;fill:#c8d2dc">${t}</text>`; });
+  g += `<rect x="910" y="1570" width="170" height="110" rx="8" fill="#17543a" stroke="#0a2a1c" stroke-width="2"/><text x="995" y="1596" text-anchor="middle" style="font:700 10px sans-serif;fill:#e9efe9">FLAME AMPLIFIER</text><text x="995" y="1610" text-anchor="middle" style="font:700 9px sans-serif;fill:#bfe6cf">TEST JACKS V dc</text>`;
+  g += `<rect x="70" y="1748" width="1000" height="80" rx="8" fill="url(#ptBeige)" stroke="#8d8672" stroke-width="2"/><text x="1056" y="1820" text-anchor="end" style="font:700 10px sans-serif;fill:#3a434c">SUBBASE</text>`;
   /* ---- loads ---- */
-  s += sect(1346, 'Burner loads');
-  const lds = [['BM', 'Blower motor', '1/3 hp', G_MOTOR], ['IG', 'Ignition xfmr', '120 / 6,000 V'], ['PV', 'Pilot valve', '120 V coil'], ['V1', 'Main valve V1', '120 V'], ['V2', 'Main valve V2', '120 V'], ['AL', 'Alarm light', '120 V']];
-  lds.forEach((d, i) => {
-    const x = 30 + (i % 3) * 350, y = 1364 + Math.floor(i / 3) * 150;
-    const gl = d[0] === 'BM' ? G_MOTOR(x + 230, y + 70, 'blw') : d[0] === 'AL' ? `<circle id="pnlAlarm" cx="${x + 230}" cy="${y + 70}" r="18" fill="#3a1d1a" stroke="#7a3a33" stroke-width="3"/>` : G_COIL(x + 200, y + 70);
-    s += box(x, y, 330, 136, d[1], d[2]) + gl + term(d[0] + '_1', x + 40, y + 100, 'b') + term(d[0] + '_2', x + 130, y + 100, 'b');
+  g += psect(1880, 'Burner loads (120 V)');
+  g += pbox(40, 1890, 250, 190, 'Ignition xfmr', '') + BX.ignx(165, 1985);
+  g += pbox(305, 1890, 250, 190, 'Pilot valve', '') + BX.solenoid(430, 1975);
+  g += pbox(570, 1890, 250, 190, 'Main valve V1', '') + BX.actuator(695, 1975, 'pnlV1');
+  g += pbox(835, 1890, 250, 190, 'Main valve V2', '') + BX.actuator(960, 1975, 'pnlV2');
+  /* brass lugs under every terminal, wires, then the terminal dots */
+  g += PT.lugs(TERMS.filter(t => !/^FT_/.test(t[0])).map(t => [t[1], t[2]]));
+  g += `<circle cx="960" cy="1640" r="12" fill="#c33" stroke="#6e1712" stroke-width="2"/><circle cx="1040" cy="1640" r="12" fill="#222" stroke="#000" stroke-width="2"/>`;
+  g += buildWires();
+  TERMS.forEach(t => {
+    const id = t[0], x = t[1], y = t[2], side = t[3] === 'r', up = t[3] === 'a' || t[3] === 'ad', ly = side ? y + 5 : up ? y - 20 : y + 34, lx = side ? x + 24 : x;
+    g += `<g class="term" data-id="${id}" tabindex="0" role="button" aria-label="${esc(NODES[id])}"><title>${esc(NODES[id])}</title>` +
+      `<circle class="ring-r" r="20" cx="${x}" cy="${y}" style="display:none"/><circle class="ring-b" r="20" cx="${x}" cy="${y}" style="display:none"/>` +
+      `<circle class="pad" cx="${x}" cy="${y}" r="24"/><circle class="hit" cx="${x}" cy="${y}" r="11"/><text x="${lx}" y="${ly}" text-anchor="${side ? 'start' : 'middle'}"${t[3] === 'ad' ? ' style="fill:#20262c"' : ''}>${TLBL[id] || id}</text></g>`;
   });
-  s += buildWires();
-  return s;
+  return g;
 }
-/* field wiring, drawn when "Wires: On" (orange: hot side, white: neutral, green: ground) */
+/* field wiring, drawn when "Wires: On". Leg colours as in the package unit game; red 120 V hot, blue neutral */
 function buildWires() {
+  const LEG = { 1: '#e8a33b', 2: '#b48cff', 3: '#4ac9c0' };
   let s = '';
   NETS.forEach((n, i) => {
-    if (n.length < 2) return;
+    const pts = n.filter(id => TPOS[id]);
+    if (pts.length < 2) return;
     const neutral = n.indexOf('NB') >= 0;
-    const col = neutral ? '#d0d6dc' : '#e8a33b';
-    const pts = n.filter(id => TPOS[id]).map(id => TPOS[id]);
-    for (let k = 1; k < pts.length; k++) {
-      const a = neutral ? TPOS.NB : pts[k - 1], b = pts[k];
-      const midY = Math.max(a[1], b[1]) + 18 + (i % 5) * 4;
-      const d = `M${a[0]} ${a[1]} V${midY} H${b[0]} V${b[1]}`;
-      s += `<path class="wr" d="${d}" stroke="${n.indexOf('GND') >= 0 && b === TPOS.GND ? '#38c172' : col}" stroke-width="3" fill="none" opacity=".75"/>`;
+    const lm = n.join(' ').match(/\b(?:F|M1_T|PS_T)([123])/);
+    const col = neutral ? '#4aa3df' : lm ? LEG[lm[1]] : '#e5483b';
+    const root = neutral ? 'NB' : pts[0];
+    for (let k = neutral ? 0 : 1; k < pts.length; k++) {
+      const a = TPOS[neutral ? root : pts[k - 1]], b = TPOS[pts[k]];
+      if (a === b) continue;
+      const lane = 22 + (i % 6) * 5;
+      const d = Math.abs(a[1] - b[1]) < 4 ? `M${a[0]} ${a[1]} V${a[1] + lane} H${b[0]} V${b[1]}` : `M${a[0]} ${a[1]} V${Math.max(a[1], b[1]) + lane} H${b[0]} V${b[1]}`;
+      s += `<path class="wr" d="${d}" stroke="${col}" stroke-width="3.5" fill="none" stroke-linejoin="round" stroke-linecap="round" opacity=".85"/>`;
     }
   });
   return s;
@@ -627,7 +1126,7 @@ function buildWires() {
 
 /* ---- ladder.js ---- */
 /* ===== Ladder schematic: how 120 V flows from L1 through each control to neutral ===== */
-const LAD_W = 900, LAD_H = 1060, RAIL_L = 70, RAIL_R = 840;
+const LAD_W = 900, LAD_H = 1390, RAIL_L = 70, RAIL_R = 840;
 
 /* symbols. Each returns [svg, width] drawn from x along a rung at height y */
 const SYM = {
@@ -660,17 +1159,45 @@ function rung(y, items, opt) {
   if (opt.label) s += `<text class="t" x="${RAIL_R + 14}" y="${y + 4}">${opt.label}</text>`;
   return s;
 }
+/* 208 V power section drawn above the control ladder: vertical legs, horizontal buses, contacts drawn vertically */
+const VS = {
+  no: (x, y, t) => `<path class="w" d="M${x} ${y} v12 M${x - 10} ${y + 12} h20 M${x - 10} ${y + 24} h20 M${x} ${y + 24} v12"/>` + (t ? `<text x="${x + 14}" y="${y + 22}">${t}</text>` : ''),
+  fuse: (x, y, t) => `<path class="w" d="M${x} ${y} v8 M${x} ${y + 40} v8"/><rect class="p" x="${x - 7}" y="${y + 8}" width="14" height="32" rx="3"/><path class="w" d="M${x} ${y + 8} v32"/>` + (t ? `<text x="${x + 12}" y="${y + 28}">${t}</text>` : ''),
+  ol: (x, y) => `<path class="w" d="M${x} ${y} v6 q8 4 0 8 q-8 4 0 8 q8 4 0 8 v6"/>`,
+  motor: (cx, cy, t) => `<circle class="p" cx="${cx}" cy="${cy}" r="26"/><text x="${cx}" y="${cy - 2}" text-anchor="middle">M</text><text x="${cx}" y="${cy + 12}" text-anchor="middle" style="font-size:10px">3~</text><text class="t" x="${cx}" y="${cy + 44}" text-anchor="middle">${t}</text>`
+};
+function powerLadder() {
+  let s = `<text class="t" x="70" y="22">208 V 3 PHASE</text>`;
+  const L = [100, 140, 180], BUS = [150, 170, 190], COL = ['#e8a33b', '#b48cff', '#4ac9c0'];
+  L.forEach((x, i) => {
+    s += `<text x="${x}" y="44" text-anchor="middle">L${i + 1}</text><path class="w" d="M${x} 50 v8" style="stroke:${COL[i]}"/>` + VS.no(x, 58, i === 2 ? 'DISC' : '') + VS.fuse(x, 94, i === 2 ? 'F1-F3 15A' : '');
+    s += `<path class="w" d="M${x} 142 V${BUS[i]} H700" style="stroke:${COL[i]}"/>`;
+  });
+  s += `<path class="w" d="M70 76 H200" style="stroke-dasharray:4 4"/>`;
+  /* blower: M1 contacts to the motor */
+  [310, 340, 370].forEach((x, i) => { s += `<circle cx="${x}" cy="${BUS[i]}" r="3.5" fill="#b9c6d3"/><path class="w" d="M${x} ${BUS[i]} V206"/>` + VS.no(x, 206, i === 2 ? 'M1' : '') + `<path class="w" d="M${x} 242 V262 L340 270"/>`; });
+  s += VS.motor(340, 296, 'BLOWER');
+  /* pump: starter contacts and overload heaters */
+  [490, 520, 550].forEach((x, i) => { s += `<circle cx="${x}" cy="${BUS[i]}" r="3.5" fill="#b9c6d3"/><path class="w" d="M${x} ${BUS[i]} V206"/>` + VS.no(x, 206, i === 2 ? 'PS' : '') + VS.ol(x, 242) + `<path class="w" d="M${x} 270 V272 L520 276"/>`; });
+  s += `<text x="566" y="262">OL</text>` + VS.motor(520, 300, 'PUMP');
+  /* control transformer on L1-L2 */
+  s += `<path class="w" d="M640 150 V214 M670 170 V214"/><circle cx="640" cy="150" r="3.5" fill="#b9c6d3"/><circle cx="670" cy="170" r="3.5" fill="#b9c6d3"/>`;
+  s += `<path class="w" d="M630 214 h50 M640 214 q-2 8 0 8 M640 216 q8 4 0 8 q8 4 0 8 q8 4 0 8 M670 216 q8 4 0 8 q8 4 0 8 q8 4 0 8 M630 246 h50 M630 250 h50"/>`;
+  s += `<text x="690" y="222">H1-H2 208 V</text><text x="690" y="262">X1-X2 120 V</text>`;
+  s += `<path class="w" d="M640 250 V362 H${RAIL_L - 40} V${330 + 60}"/><path class="w" d="M670 250 V276 H${RAIL_R} V${330 + 46}"/><text x="${RAIL_R - 40}" y="270">X2 (grounded)</text><text x="${RAIL_L - 36}" y="356">X1</text>`;
+  return s;
+}
 function buildLadder() {
-  let s = '';
-  s += `<text class="t" x="${RAIL_L - 30}" y="30">L1 120 V</text><text class="t" x="${RAIL_R - 6}" y="30">N</text>`;
-  /* supply: disconnect and fuse feeding the left rail */
-  s += `<path class="w" d="M${RAIL_L - 40} 60 h12"/>` + SYM.no(RAIL_L - 28, 60, 'DISC')[0] + `<path class="w" d="M${RAIL_L + 16} 60 h10"/>` + SYM.fuse(RAIL_L + 26, 60, 'F1 10A')[0] + `<path class="w" d="M${RAIL_L + 82} 60 h20 v20 H${RAIL_L} V1010"/>`;
+  let s = powerLadder() + '<g transform="translate(0,330)">';
+  s += `<text class="t" x="${RAIL_L + 60}" y="22">120 V CONTROL (X1 after FU4)</text><text class="t" x="${RAIL_R - 6}" y="30">X2</text>`;
+  /* control fuse FU4 feeding the left rail */
+  s += SYM.fuse(RAIL_L - 40, 60, 'FU4 3A')[0] + `<path class="w" d="M${RAIL_L + 16} 60 h20 v20 H${RAIL_L} V1010"/>`;
   s += `<path class="w" d="M${RAIL_R} 46 V1010"/>`;
-  /* rung 1: heating call to the pump relay coil, and node A */
-  s += rung(130, [['no', 'HEAT CALL'], ['wire', 'A', 290], ['coil', 'PR']], { label: '1' });
-  s += rung(210, [['no', 'PR'], ['motor', 'PUMP']], { label: '2' });
+  /* rung 1: heating call, pump overload contact, pump starter coil; node A feeds the burner */
+  s += rung(130, [['no', 'HEAT CALL'], ['wire', 'A', 120], ['nc', 'OL 95-96'], ['coil', 'PS']], { label: '1' });
+  s += `<text x="${RAIL_L + 300}" y="200" style="font:11px var(--mono);fill:#8fa1b3">PS = pump starter. OL opens on motor overload (manual reset).</text>`;
   /* rung 3: from A through the limit string to terminal 6 */
-  const ax = 310;
+  const ax = 330;
   s += `<path class="w" d="M${ax} 130 V290"/><circle cx="${ax}" cy="130" r="4" fill="#b9c6d3"/>`;
   s += rung(290, [['no', 'BURNER SW'], ['temp', 'OPER 180°', true], ['temp', 'HI LIM MR', true], ['probe', 'LWCO'], ['flow', 'FLOW SW'], ['rmT', '6']], { from: ax, label: '3' });
   s += `<text x="${ax + 4}" y="330" style="font:11px var(--mono);fill:#8fa1b3">operating and high limit open on temperature rise</text>`;
@@ -679,13 +1206,13 @@ function buildLadder() {
   s += `<text x="180" y="430" style="font:11px var(--mono);fill:#8fa1b3">gas pressure switches are manual reset. 6 and 7 are inputs to the relay module.</text>`;
   /* the relay module outputs */
   s += `<rect x="${RAIL_L + 30}" y="470" width="150" height="440" rx="6" fill="none" stroke="#4aa3df" stroke-dasharray="6 4"/><text class="t" x="${RAIL_L + 40}" y="490">RELAY MODULE</text><text class="t" x="${RAIL_L + 40}" y="506">internal relays</text>`;
-  const outs = [[550, '3', 'motor', 'BLOWER', '5'], [620, '10', 'xfmr', 'IGN XFMR', '6'], [690, '8', 'coil', 'PV', '7'], [760, '9', 'coil', 'V1', '8'], [870, '4', 'lamp', 'ALARM', '10']];
+  const outs = [[550, '3', 'coil', 'M1', '5'], [620, '10', 'xfmr', 'IGN XFMR', '6'], [690, '8', 'coil', 'PV', '7'], [760, '9', 'coil', 'V1', '8'], [870, '4', 'lamp', 'ALARM', '10']];
   outs.forEach(o => { s += rung(o[0], [['no', ''], ['rmT', o[1]], ['wire', '', 120], [o[2], o[3]]], { label: o[4] }); });
   s += `<path class="w" d="M520 760 V800 H${RAIL_R - 120}"/><circle cx="520" cy="760" r="4" fill="#b9c6d3"/>` + SYM.coil(RAIL_R - 120, 800, 'V2')[0] + `<path class="w" d="M${RAIL_R - 64} 800 H${RAIL_R}"/><text class="t" x="${RAIL_R + 14}" y="804">9</text>`;
   s += rung(970, [['rmT', 'L1'], ['wire', 'RELAY MODULE POWER', 380], ['rmT', 'L2']], { label: '11' });
   s += `<text x="${RAIL_L + 40}" y="530" style="font:11px var(--mono);fill:#8fa1b3">3: prepurge→postpurge · 10: pilot trial · 8: PFEP+MFEP · 9: MFEP+run · 4: lockout</text>`;
-  s += `<text x="${RAIL_L}" y="1040" style="font:12px var(--mono);fill:#8fa1b3">UV scanner wires to F and G on the subbase (flame signal: 1.25 V dc minimum at the amplifier test jacks).</text>`;
-  return s;
+  s += `<text x="${RAIL_L}" y="1040" style="font:12px var(--mono);fill:#8fa1b3">M1 = blower contactor. UV scanner wires to F and G on the subbase (1.25 V dc minimum at the amplifier test jacks).</text>`;
+  return s + '</g>';
 }
 
 /* ---- pic.js ---- */
@@ -794,13 +1321,13 @@ function sheet(html) { $('sheet').className = 'sheet'; $('sheet').innerHTML = ht
 const closeSheet = () => { $('modal').hidden = true; };
 
 /* ---------- normal readings and specs ---------- */
-const GUIDE = [['Line L1 to neutral', '≈ 120 V'], ['Across a closed switch, power on', '0 V'], ['Across an open switch in a live string', '≈ 120 V'],
+const GUIDE = [['Any two legs (L1-L2, L2-L3, L3-L1)', '≈ 208 V'], ['Any leg to ground', '≈ 120 V'], ['Control transformer X1 to X2', '≈ 120 V'], ['Across a closed switch, power on', '0 V'], ['Across an open switch in a live string', '≈ 120 V'],
   ['Flame signal, pilot', '2.0 – 3.0 V dc'], ['Flame signal, main', '3.5 – 4.5 V dc'], ['Minimum to prove flame', '1.25 V dc'],
   ['Gas inlet, natural gas', '6.5 – 7.5 in. w.c.'], ['Manifold, full fire', '3.5 in. w.c.'], ['Blower static at the air switch', '≈ 1.4 in. w.c.'],
-  ['Boiler pressure, cold / at 180°F', '12 / about 20 psi'], ['Pump differential', '≈ 9.4 psi'], ['Pump motor current', '≈ 10.2 A'], ['Blower motor current', '≈ 5.8 A']];
+  ['Boiler pressure, cold / at 180°F', '12 / about 20 psi'], ['Pump differential', '≈ 9.4 psi'], ['Pump motor current, each leg', '≈ 3.3 A'], ['Blower motor current, each leg', '≈ 2.6 A']];
 function buildSpecs() {
   const t = (h, rows) => `<h3>${h}</h3><table><tr><th>Item</th><th>Value</th></tr>` + rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('') + '</table>';
-  return t('Electrical', [['Supply', '120 V, 1 phase, 60 Hz'], ['Control fuse F1', '10 A'], ['Blower motor', '1/3 hp, 5.8 A running'], ['Circulating pump motor', '3/4 hp, 10.2 A running'], ['Ignition transformer', '120 V primary, about 1.3 A'], ['Relay coils and valve coils', '120 V']]) +
+  return t('Electrical', [['Supply', '208 V, 3 phase, 60 Hz (120 V leg to ground)'], ['Disconnect fuses F1–F3', '15 A'], ['Control transformer', '208 V primary (L1-L2), 120 V secondary, X2 grounded'], ['Control fuse FU4', '3 A'], ['Burner blower motor', '3/4 hp, 2.6 A per leg running'], ['Circulating pump motor', '1 hp, 3.3 A per leg running'], ['Pump overload', 'manual reset, set 3.6 A'], ['Locked rotor (motor humming)', 'about 14–17 A'], ['Ignition transformer', '120 V primary, about 1.3 A'], ['Contactor coils and valve coils', '120 V']]) +
     t('Flame safeguard sequence (this game runs it at 2× speed)', [['Initiate after power-up', '10 s'], ['Prepurge (blower on, airflow proven within 10 s)', '30 s'], ['Pilot flame establishing period, PFEP (ignition + pilot)', '10 s'], ['Main flame establishing period, MFEP (pilot + main)', '10 s'], ['Run (main valves only, interrupted pilot)', 'until the limits open'], ['Postpurge', '15 s'], ['Flame signal to prove flame', '1.25 V dc minimum'], ['Normal flame signal, pilot / main', '2 – 3 / 3.5 – 4.5 V dc']]) +
     t('Gas train (natural gas)', [['Inlet pressure', '7 in. w.c. (6.5 firing)'], ['Manifold pressure, full fire', '3.5 in. w.c.'], ['Pilot pressure', '3.0 in. w.c.'], ['Low gas pressure switch (manual reset)', 'opens below 3.5 in. w.c.'], ['High gas pressure switch (manual reset)', 'opens above 5.0 in. w.c.'], ['Air proving switch', 'closes at 0.5 in. w.c.'], ['Blower static at the switch port', 'about 1.4 in. w.c.']]) +
     t('Combustion (flue gas at the stack)', [['O2', '3 – 6 %'], ['CO2', '8.5 – 10 %'], ['CO, as measured', 'under 100 ppm'], ['Stack temperature', '380 – 450°F'], ['Combustion efficiency', 'about 82 %']]) +
@@ -812,8 +1339,8 @@ function buildPlate() {
     <div class="plr">Input: 1,000,000 Btu/h natural gas</div><div class="plr">Gross output: 820,000 Btu/h</div>
     <div class="plr">Max. allowable working pressure: 80 psi water</div><div class="plr">Relief valve setting: 30 psi</div>
     <div class="plr">Max. water temperature: 250°F</div><div class="plr">Manifold pressure: 3.5 in. w.c. · Min. inlet: 5.0 in. w.c.</div>
-    <div class="plr">Electrical: 120 V, 1 ph, 60 Hz · Burner 7.5 FLA</div></div>
-    <div class="plate"><h3>Circulating pump</h3><div class="plm">In-line, close-coupled</div><div class="plr">80 gpm at 22 ft head</div><div class="plr">3/4 hp · 120 V · 1 ph · 10.6 FLA</div></div>`;
+    <div class="plr">Electrical: 208 V, 3 ph, 60 Hz · Burner motor 2.9 FLA</div><div class="plr">Control circuit: 120 V</div></div>
+    <div class="plate"><h3>Circulating pump</h3><div class="plm">In-line, close-coupled</div><div class="plr">80 gpm at 22 ft head</div><div class="plr">1 hp · 208 V · 3 ph · 3.6 FLA</div></div>`;
 }
 
 /* ---------- screens ---------- */
@@ -868,8 +1395,28 @@ function updateStatus() {
     const kk = el.dataset.fan, on = /^pump/.test(kk) ? B.pumpRun : B.blowerRun;
     el.classList.toggle('on', on); el.style.setProperty('--d', /^pump/.test(kk) && B.has('coupler') ? '.25s' : '.3s');
   });
+  syncPanel(s, pow);
   renderPicLive(B);
   setSwitches();
+}
+
+/* contactors pull in, LEDs and lamps on the panel follow the boiler */
+function syncPanel(s, pow) {
+  const st = { m1: !!B.en.m1, ps: !!B.en.ps }, NAME = { m1: 'M1', ps: 'PUMP' };
+  document.querySelectorAll('#unitSvg [data-k]').forEach(el => {
+    const k = el.dataset.k, on = !!st[k], c = el.classList;
+    if (c.contains('armg') || c.contains('armp')) {
+      const was = el.dataset.on; el.dataset.on = on ? '1' : '0';
+      if (was !== el.dataset.on) el.style.transition = on ? 'transform .09s cubic-bezier(.6,0,1,.55)' : 'transform .22s cubic-bezier(.2,1.35,.5,1)';
+      el.style.transform = c.contains('armg') ? (on ? 'translateY(0)' : 'translateY(-26px)') : (on ? 'translateX(0)' : 'translateX(-7px)');
+    } else if (c.contains('coilglow')) el.setAttribute('opacity', on ? 0.45 : 0);
+    else if (c.contains('kled')) el.setAttribute('fill', on ? '#38e08a' : '#55616d');
+    else if (c.contains('kbadge')) el.textContent = NAME[k] + (on ? ' CLOSED' : ' OPEN');
+  });
+  const led = { POWER: pow, PILOT: pow && B.out(8), FLAME: pow && B.sig >= FLAME_MIN, MAIN: pow && B.out(9), ALARM: pow && B.rm.st === 'LOCKOUT' };
+  document.querySelectorAll('#unitSvg .pled').forEach(el => { const k = el.dataset.led; el.setAttribute('fill', led[k] ? (k === 'ALARM' ? '#ff3b2e' : '#38e08a') : '#3b4652'); });
+  const lw = $('pnlLwLamp'); if (lw) lw.setAttribute('fill', s.lwLamp ? '#ffb020' : '#3a2a1a');
+  [['pnlV1', B.en.v1], ['pnlV2', B.en.v2]].forEach(v => { const e = $(v[0]); if (e) { e.textContent = v[1] ? 'OPEN' : 'CLOSED'; e.style.fill = v[1] ? '#38e08a' : '#e5483b'; } });
 }
 
 /* ---------- meter ---------- */
@@ -977,11 +1524,12 @@ function installPart(k) {
   if (!p.live && B.disc) return strike('You started work on the boiler with the disconnect closed. 120 V was live in the cabinet and the burner could start.');
   partsUsed++;
   if (p.reset) {
-    const was = p.reset === 'hl' ? B.hlTrip : p.reset === 'lg' ? B.lgTrip : B.hgTrip;
+    const was = p.reset === 'hl' ? B.hlTrip : p.reset === 'lg' ? B.lgTrip : p.reset === 'ol' ? B.olTrip : B.hgTrip;
     if (!was) { wrongParts++; log(p.name + ': it was not tripped.', 's'); return; }
     if (p.reset === 'hl') { if (B.Tb > HL_SET - 15) { partsUsed--; log('The high limit will not reset yet. The water is still ' + Math.round(B.Tb) + '°F. Let it cool below ' + (HL_SET - 15) + '°F.', 'h'); return; } B.hlTrip = false; }
     if (p.reset === 'lg') { B.lgTrip = false; B.tick(0.01); if (B.lgTrip) { log('Low gas pressure switch reset. It popped right back out: the gas pressure at the switch is still too low.', 's'); return; } }
     if (p.reset === 'hg') B.hgTrip = false;
+    if (p.reset === 'ol') { B.olTrip = false; B.humT = 0; }
     B.resetsSinceFix = 0; log(p.name.replace('Press', 'Pressed') + '. It latched in.', 'g'); updateStatus(); return;
   }
   const cured = [...B.faults].filter(f => FIXES[f] === k);

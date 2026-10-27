@@ -8,7 +8,7 @@ import re
 import sys
 
 d = pathlib.Path(__file__).parent
-JS = ['engine.js', 'parts.js', 'levels.js', 'panel.js', 'ladder.js', 'pic.js', 'app.js']
+JS = ['engine.js', 'parts.js', 'ptdraw.js', 'levels.js', 'panel.js', 'ladder.js', 'pic.js', 'app.js']
 CSS = ['style.css', 'boiler.css']
 
 NEWER = [

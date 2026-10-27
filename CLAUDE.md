@@ -1,7 +1,7 @@
 # Boiler Troubleshooting — project notes
 
 A training game for military HVAC technicians, the sister game of Package Unit Troubleshooting. Trainees troubleshoot a
-simulated commercial hot-water boiler (1,000 MBH, on/off power burner, 7800-series flame safeguard) with a meter, clamp,
+simulated commercial hot-water boiler (1,000 MBH, 208 V 3-phase, on/off power burner, 7800-series flame safeguard) with a meter, clamp,
 manometer, pump gauges, pipe thermometers and a combustion analyzer. It ships as ONE self-contained offline HTML file.
 
 ## Build and test
@@ -16,14 +16,18 @@ manometer, pump gauges, pipe thermometers and a combustion analyzer. It ships as
 
 ## Files
 engine.js (simulation: resistor-network solver for volts/ohms, flame safeguard state machine, water, gas, combustion),
-parts.js (parts, FIXES fault→part, inspect text for the boiler-room picture), levels.js (20 levels), panel.js (probe
-points), ladder.js (ladder schematic), pic.js (boiler room picture), app.js (UI), style.css (shared with the package unit
+parts.js (parts, FIXES fault→part, inspect text for the boiler-room picture), ptdraw.js (the package unit game's PT
+part artwork, copied unchanged so both panels look alike), levels.js (22 levels), panel.js (probe points, drawn with PT), ladder.js (ladder schematic), pic.js (boiler room picture), app.js (UI), style.css (shared with the package unit
 game, copied as-is) + boiler.css (additions).
 
 ## How the simulation works
-- Every wire run is a net (NETS); every switch, coil, motor and fuse is an element with a resistance (0 closed, Infinity
-  open). Volts come from a nodal solve with L1 = 120 V and neutral = 0, so readings across open switches, loads in series
-  and parallel coils all fall out naturally. Ohms is the same network unpowered (e.g. V1 reads in parallel with V2 unless
+- Power: 208 V 3-phase wye (120 V leg to ground) → fused disconnect F1–F3 → blower contactor M1 (coil from RM 3) to a
+  3-phase blower, pump starter PS with overload (95-96 NC in the coil circuit, manual reset) to a 3-phase pump, and a
+  208/120 V control transformer on L1-L2 → FU4 → the 120 V control circuit (X2 grounded).
+- Every wire run is a net (NETS); every switch, coil, motor winding and fuse is an element with a resistance (0 closed,
+  Infinity open). Volts are phasors from a nodal solve (legs at 0/-120/+120°, then the transformer secondary from H1-H2), so readings across open switches, loads in series
+  and parallel coils all fall out naturally, including the phantom voltage on a dead leg fed back through a motor.
+  A 3-phase motor runs only with all three legs at full voltage; otherwise it hums, and the pump overload trips after 8 s. Ohms is the same network unpowered (e.g. V1 reads in parallel with V2 unless
   isolated; the PR coil reads in parallel with the relay module while the heating call is closed).
 - Flame safeguard (rmStep): INITIATE 10 s → STANDBY → PREPURGE 30 s (terminal 7 must prove within 10 s) → PFEP 10 s
   (3, 8, 10) → MFEP 10 s (3, 8, 9) → RUN (3, 9) → POSTPURGE 15 s. Timers run at 2× (SPEED). Lockout needs the Reset
@@ -47,7 +51,7 @@ game, copied as-is) + boiler.css (additions).
 - Burner modelled as on/off with an interrupted pilot (pilot off at the end of MFEP); no low/high fire or firing-rate motor yet.
 - 7800-series terminal numbers used: L1, L2, 3 blower, 4 alarm, 6 limits in, 7 lockout interlock in, 8 pilot, 9 main,
   10 ignition, F/G scanner. Lockout messages are written in plain words, not the exact Honeywell fault codes.
-- All 120 V single phase, including a 3/4 hp pump. Values (pressures, amps, flame signal, analyzer readings) are typical,
+- 3/4 hp blower and 1 hp pump at 208 V 3-phase; 120 V control from a control transformer. Values (pressures, amps, flame signal, analyzer readings) are typical,
   not from one manufacturer's literature.
 
 ## Still to do

@@ -18,13 +18,13 @@ function sheet(html) { $('sheet').className = 'sheet'; $('sheet').innerHTML = ht
 const closeSheet = () => { $('modal').hidden = true; };
 
 /* ---------- normal readings and specs ---------- */
-const GUIDE = [['Line L1 to neutral', '≈ 120 V'], ['Across a closed switch, power on', '0 V'], ['Across an open switch in a live string', '≈ 120 V'],
+const GUIDE = [['Any two legs (L1-L2, L2-L3, L3-L1)', '≈ 208 V'], ['Any leg to ground', '≈ 120 V'], ['Control transformer X1 to X2', '≈ 120 V'], ['Across a closed switch, power on', '0 V'], ['Across an open switch in a live string', '≈ 120 V'],
   ['Flame signal, pilot', '2.0 – 3.0 V dc'], ['Flame signal, main', '3.5 – 4.5 V dc'], ['Minimum to prove flame', '1.25 V dc'],
   ['Gas inlet, natural gas', '6.5 – 7.5 in. w.c.'], ['Manifold, full fire', '3.5 in. w.c.'], ['Blower static at the air switch', '≈ 1.4 in. w.c.'],
-  ['Boiler pressure, cold / at 180°F', '12 / about 20 psi'], ['Pump differential', '≈ 9.4 psi'], ['Pump motor current', '≈ 10.2 A'], ['Blower motor current', '≈ 5.8 A']];
+  ['Boiler pressure, cold / at 180°F', '12 / about 20 psi'], ['Pump differential', '≈ 9.4 psi'], ['Pump motor current, each leg', '≈ 3.3 A'], ['Blower motor current, each leg', '≈ 2.6 A']];
 function buildSpecs() {
   const t = (h, rows) => `<h3>${h}</h3><table><tr><th>Item</th><th>Value</th></tr>` + rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('') + '</table>';
-  return t('Electrical', [['Supply', '120 V, 1 phase, 60 Hz'], ['Control fuse F1', '10 A'], ['Blower motor', '1/3 hp, 5.8 A running'], ['Circulating pump motor', '3/4 hp, 10.2 A running'], ['Ignition transformer', '120 V primary, about 1.3 A'], ['Relay coils and valve coils', '120 V']]) +
+  return t('Electrical', [['Supply', '208 V, 3 phase, 60 Hz (120 V leg to ground)'], ['Disconnect fuses F1–F3', '15 A'], ['Control transformer', '208 V primary (L1-L2), 120 V secondary, X2 grounded'], ['Control fuse FU4', '3 A'], ['Burner blower motor', '3/4 hp, 2.6 A per leg running'], ['Circulating pump motor', '1 hp, 3.3 A per leg running'], ['Pump overload', 'manual reset, set 3.6 A'], ['Locked rotor (motor humming)', 'about 14–17 A'], ['Ignition transformer', '120 V primary, about 1.3 A'], ['Contactor coils and valve coils', '120 V']]) +
     t('Flame safeguard sequence (this game runs it at 2× speed)', [['Initiate after power-up', '10 s'], ['Prepurge (blower on, airflow proven within 10 s)', '30 s'], ['Pilot flame establishing period, PFEP (ignition + pilot)', '10 s'], ['Main flame establishing period, MFEP (pilot + main)', '10 s'], ['Run (main valves only, interrupted pilot)', 'until the limits open'], ['Postpurge', '15 s'], ['Flame signal to prove flame', '1.25 V dc minimum'], ['Normal flame signal, pilot / main', '2 – 3 / 3.5 – 4.5 V dc']]) +
     t('Gas train (natural gas)', [['Inlet pressure', '7 in. w.c. (6.5 firing)'], ['Manifold pressure, full fire', '3.5 in. w.c.'], ['Pilot pressure', '3.0 in. w.c.'], ['Low gas pressure switch (manual reset)', 'opens below 3.5 in. w.c.'], ['High gas pressure switch (manual reset)', 'opens above 5.0 in. w.c.'], ['Air proving switch', 'closes at 0.5 in. w.c.'], ['Blower static at the switch port', 'about 1.4 in. w.c.']]) +
     t('Combustion (flue gas at the stack)', [['O2', '3 – 6 %'], ['CO2', '8.5 – 10 %'], ['CO, as measured', 'under 100 ppm'], ['Stack temperature', '380 – 450°F'], ['Combustion efficiency', 'about 82 %']]) +
@@ -36,8 +36,8 @@ function buildPlate() {
     <div class="plr">Input: 1,000,000 Btu/h natural gas</div><div class="plr">Gross output: 820,000 Btu/h</div>
     <div class="plr">Max. allowable working pressure: 80 psi water</div><div class="plr">Relief valve setting: 30 psi</div>
     <div class="plr">Max. water temperature: 250°F</div><div class="plr">Manifold pressure: 3.5 in. w.c. · Min. inlet: 5.0 in. w.c.</div>
-    <div class="plr">Electrical: 120 V, 1 ph, 60 Hz · Burner 7.5 FLA</div></div>
-    <div class="plate"><h3>Circulating pump</h3><div class="plm">In-line, close-coupled</div><div class="plr">80 gpm at 22 ft head</div><div class="plr">3/4 hp · 120 V · 1 ph · 10.6 FLA</div></div>`;
+    <div class="plr">Electrical: 208 V, 3 ph, 60 Hz · Burner motor 2.9 FLA</div><div class="plr">Control circuit: 120 V</div></div>
+    <div class="plate"><h3>Circulating pump</h3><div class="plm">In-line, close-coupled</div><div class="plr">80 gpm at 22 ft head</div><div class="plr">1 hp · 208 V · 3 ph · 3.6 FLA</div></div>`;
 }
 
 /* ---------- screens ---------- */
@@ -92,8 +92,28 @@ function updateStatus() {
     const kk = el.dataset.fan, on = /^pump/.test(kk) ? B.pumpRun : B.blowerRun;
     el.classList.toggle('on', on); el.style.setProperty('--d', /^pump/.test(kk) && B.has('coupler') ? '.25s' : '.3s');
   });
+  syncPanel(s, pow);
   renderPicLive(B);
   setSwitches();
+}
+
+/* contactors pull in, LEDs and lamps on the panel follow the boiler */
+function syncPanel(s, pow) {
+  const st = { m1: !!B.en.m1, ps: !!B.en.ps }, NAME = { m1: 'M1', ps: 'PUMP' };
+  document.querySelectorAll('#unitSvg [data-k]').forEach(el => {
+    const k = el.dataset.k, on = !!st[k], c = el.classList;
+    if (c.contains('armg') || c.contains('armp')) {
+      const was = el.dataset.on; el.dataset.on = on ? '1' : '0';
+      if (was !== el.dataset.on) el.style.transition = on ? 'transform .09s cubic-bezier(.6,0,1,.55)' : 'transform .22s cubic-bezier(.2,1.35,.5,1)';
+      el.style.transform = c.contains('armg') ? (on ? 'translateY(0)' : 'translateY(-26px)') : (on ? 'translateX(0)' : 'translateX(-7px)');
+    } else if (c.contains('coilglow')) el.setAttribute('opacity', on ? 0.45 : 0);
+    else if (c.contains('kled')) el.setAttribute('fill', on ? '#38e08a' : '#55616d');
+    else if (c.contains('kbadge')) el.textContent = NAME[k] + (on ? ' CLOSED' : ' OPEN');
+  });
+  const led = { POWER: pow, PILOT: pow && B.out(8), FLAME: pow && B.sig >= FLAME_MIN, MAIN: pow && B.out(9), ALARM: pow && B.rm.st === 'LOCKOUT' };
+  document.querySelectorAll('#unitSvg .pled').forEach(el => { const k = el.dataset.led; el.setAttribute('fill', led[k] ? (k === 'ALARM' ? '#ff3b2e' : '#38e08a') : '#3b4652'); });
+  const lw = $('pnlLwLamp'); if (lw) lw.setAttribute('fill', s.lwLamp ? '#ffb020' : '#3a2a1a');
+  [['pnlV1', B.en.v1], ['pnlV2', B.en.v2]].forEach(v => { const e = $(v[0]); if (e) { e.textContent = v[1] ? 'OPEN' : 'CLOSED'; e.style.fill = v[1] ? '#38e08a' : '#e5483b'; } });
 }
 
 /* ---------- meter ---------- */
@@ -201,11 +221,12 @@ function installPart(k) {
   if (!p.live && B.disc) return strike('You started work on the boiler with the disconnect closed. 120 V was live in the cabinet and the burner could start.');
   partsUsed++;
   if (p.reset) {
-    const was = p.reset === 'hl' ? B.hlTrip : p.reset === 'lg' ? B.lgTrip : B.hgTrip;
+    const was = p.reset === 'hl' ? B.hlTrip : p.reset === 'lg' ? B.lgTrip : p.reset === 'ol' ? B.olTrip : B.hgTrip;
     if (!was) { wrongParts++; log(p.name + ': it was not tripped.', 's'); return; }
     if (p.reset === 'hl') { if (B.Tb > HL_SET - 15) { partsUsed--; log('The high limit will not reset yet. The water is still ' + Math.round(B.Tb) + '°F. Let it cool below ' + (HL_SET - 15) + '°F.', 'h'); return; } B.hlTrip = false; }
     if (p.reset === 'lg') { B.lgTrip = false; B.tick(0.01); if (B.lgTrip) { log('Low gas pressure switch reset. It popped right back out: the gas pressure at the switch is still too low.', 's'); return; } }
     if (p.reset === 'hg') B.hgTrip = false;
+    if (p.reset === 'ol') { B.olTrip = false; B.humT = 0; }
     B.resetsSinceFix = 0; log(p.name.replace('Press', 'Pressed') + '. It latched in.', 'g'); updateStatus(); return;
   }
   const cured = [...B.faults].filter(f => FIXES[f] === k);
