@@ -1,0 +1,18 @@
+/* ===== Boiler game additions on top of the shared package-unit stylesheet ===== */
+#kdm{background:#0d1822;border:3px solid #25343f;border-radius:6px;padding:10px 12px;font-family:var(--mono);color:#7fd7ff;min-height:64px}
+#kdm1{font:700 18px var(--mono);letter-spacing:.04em}
+#kdm2{font-size:12.5px;margin-top:4px;color:#a9e4ff;min-height:16px}
+#kdm.dark{background:#06090c;color:transparent}#kdm.dark *{visibility:hidden}
+#kdm.lock{color:#ffb3ac}#kdm.lock #kdm2{color:#ffd0cb}
+.leds{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font:700 11px var(--head);letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.leds u{display:inline-block;width:10px;height:10px;border-radius:50%;background:#3b4652;margin-right:5px;vertical-align:-1px}
+.leds u.on{background:#38e08a;box-shadow:0 0 6px #38e08a}.leds u.r.on{background:#ff3b2e;box-shadow:0 0 6px #ff3b2e}
+#unitSvg .wr{pointer-events:none}
+#anaOut table{width:100%;border-collapse:collapse}#anaOut td{padding:1px 0;border-bottom:1px solid var(--line)}#anaOut td:last-child{text-align:right;color:var(--yellow)}
+#picPanel{grid-template-columns:1fr}
+.spot .ring{pointer-events:none}
+.qa{display:grid;gap:6px;margin:10px 0}.qa .btn{text-align:left}
+.ans{background:var(--panel2);border-left:3px solid var(--yellow);padding:8px 10px;margin:8px 0;min-height:1.4em}
+.hist td:first-child{color:var(--dim);white-space:nowrap;padding-right:10px;font-family:var(--mono)}.hist td:last-child{text-align:left!important;font-family:var(--body)!important}
+html[data-tab="Pic"] #cardClamp{display:block}
+html:not([data-tab="Unit"]):not([data-tab="Pic"]) #cardKdm{order:-1}

@@ -1,0 +1,90 @@
+/* ===== Parts counter: every part or action a trainee can pick, and which fault each one cures ===== */
+const PARTS = {
+  fuse:      { name: 'Control fuse F1 (10 A)', g: 'Power and controls' },
+  prelay:    { name: 'Pump relay PR (120 V coil)', g: 'Power and controls' },
+  oc:        { name: 'Operating aquastat', g: 'Power and controls' },
+  hl:        { name: 'High limit aquastat (manual reset)', g: 'Power and controls' },
+  hlreset:   { name: 'Press the reset button on the high limit', g: 'Power and controls', live: true, reset: 'hl' },
+  rm:        { name: 'Flame safeguard relay module', g: 'Flame safeguard' },
+  amp:       { name: 'Flame amplifier (plug-in card)', g: 'Flame safeguard' },
+  scanner:   { name: 'UV flame scanner', g: 'Flame safeguard' },
+  scanclean: { name: 'Clean the flame scanner lens and sight tube', g: 'Flame safeguard' },
+  ignx:      { name: 'Ignition transformer', g: 'Burner' },
+  electrode: { name: 'Ignition electrode (set the gap)', g: 'Burner' },
+  pilotv:    { name: 'Pilot gas valve', g: 'Burner' },
+  pilotcock: { name: 'Open the pilot gas cock', g: 'Burner', live: true },
+  blower:    { name: 'Burner blower motor', g: 'Burner' },
+  blowclean: { name: 'Clean the blower wheel and air inlet', g: 'Burner' },
+  aps:       { name: 'Air proving switch', g: 'Burner' },
+  apstube:   { name: 'Air proving switch sensing tube', g: 'Burner' },
+  linkage:   { name: 'Reset the air damper linkage (combustion setup)', g: 'Burner', live: true },
+  tubes:     { name: 'Brush the fire tubes and clean the flue passages', g: 'Burner' },
+  gascock:   { name: 'Open the main manual gas valve', g: 'Gas train', live: true },
+  gasutil:   { name: 'Call the gas utility about low supply pressure', g: 'Gas train', live: true },
+  gasreg:    { name: 'Main gas pressure regulator', g: 'Gas train' },
+  lgps:      { name: 'Low gas pressure switch', g: 'Gas train' },
+  lgpsreset: { name: 'Press the reset button on the low gas pressure switch', g: 'Gas train', live: true, reset: 'lg' },
+  hgpsreset: { name: 'Press the reset button on the high gas pressure switch', g: 'Gas train', live: true, reset: 'hg' },
+  mainv1:    { name: 'Main gas valve V1 (actuator / coil)', g: 'Gas train' },
+  mainv2:    { name: 'Main gas valve V2 (actuator / coil)', g: 'Gas train' },
+  pump:      { name: 'Circulating pump motor', g: 'Water side' },
+  coupler:   { name: 'Pump coupler', g: 'Water side' },
+  isoopen:   { name: 'Open the pump isolation valves', g: 'Water side', live: true },
+  purgeair:  { name: 'Purge air from the system (vents and purge valve)', g: 'Water side', live: true },
+  strainer:  { name: 'Clean the pump suction strainer', g: 'Water side' },
+  flowsw:    { name: 'Flow switch', g: 'Water side' },
+  lwcoclean: { name: 'Clean the low-water cutoff probe', g: 'Water side' },
+  fillopen:  { name: 'Open the make-up water valve and fill the system', g: 'Water side', live: true },
+  exptank:   { name: 'Expansion tank (drain, recharge air to fill pressure)', g: 'Water side' },
+  relief:    { name: 'Pressure relief valve', g: 'Water side' },
+  jmplwco:   { name: 'Remove jumper: low-water cutoff', g: 'Remove a jumper', jumper: true }
+};
+const FIXES = {
+  fuse_open: 'fuse', pr_coil: 'prelay', oc_bad: 'oc', oc_stuck: 'oc', hl_bad: 'hl', rm_bad: 'rm', amp_bad: 'amp', scanner_bad: 'scanner',
+  lens_dirty: 'scanclean', ig_open: 'ignx', electrode: 'electrode', pv_open: 'pilotv', pilot_cock: 'pilotcock', blower_open: 'blower',
+  blower_dirty: 'blowclean', aps_bad: 'aps', aps_weld: 'aps', aps_tube: 'apstube', linkage: 'linkage', tubes_soot: 'tubes',
+  gas_closed: 'gascock', gas_low: 'gasutil', reg_high: 'gasreg', reg_low: 'gasreg', v1_open: 'mainv1', v2_open: 'mainv2',
+  pm_open: 'pump', coupler: 'coupler', iso_closed: 'isoopen', air_bound: 'purgeair', strainer: 'strainer', fs_bad: 'flowsw',
+  lwco_dirty: 'lwcoclean', low_water: 'fillopen', tank_logged: 'exptank', relief_bad: 'relief', jmp_lwco: 'jmplwco'
+};
+const PART_GROUPS = ['Power and controls', 'Flame safeguard', 'Burner', 'Gas train', 'Water side', 'Remove a jumper'];
+
+/* what a tech finds when they look closely at a part (unit picture). Only the clicked part tells anything */
+function inspectText(k, B) {
+  const f = B.faults, off = !B.disc;
+  const T = {
+    burner: () => 'Burner head and blower housing. ' + (B.blowerRun ? 'The blower is running.' : 'The blower is stopped.'),
+    blower: () => !off ? 'Open the disconnect before you reach into the blower housing.' : f.has('blower_dirty') ? 'The blower wheel blades are packed with lint and dust, and the air inlet screen is matted over.' : 'The blower wheel is clean and spins freely by hand. The inlet screen is clear.',
+    damper: () => f.has('linkage') ? 'The air damper is much further open than the paint mark on the shaft. The linkage set screw is loose.' : 'The air damper lines up with the paint mark on its shaft. The linkage is tight.',
+    aps: () => f.has('aps_tube') ? 'The sensing tube from the blower housing to the switch is cracked through at a tight bend.' : 'The sensing tube is soft and whole, pushed fully on both barbs. Setpoint 0.5 in. w.c.',
+    sight: () => B.main ? 'Through the sight glass: a steady main flame' + (f.has('linkage') ? ', short and lifting off the burner head, very blue.' : f.has('blower_dirty') ? ', long, lazy and yellow-tipped.' : ', blue with a firm shape.') : B.pilot ? 'Through the sight glass: a pilot flame.' : B.spark ? 'Through the sight glass: a spark snapping at the pilot, but no flame.' : 'Through the sight glass: dark.',
+    scanner: () => !off ? 'Open the disconnect before you pull the scanner.' : f.has('lens_dirty') ? 'The scanner lens and sight tube are coated with a grey-brown film.' : 'The scanner lens is clear and the sight tube is clean.',
+    electrode: () => !off ? 'Open the disconnect before you pull the pilot assembly.' : f.has('electrode') ? 'The electrode porcelain has a hairline crack, with a black carbon track across it.' : 'The electrode porcelain is clean and whole. Gap is about 1/8 inch.',
+    ignx: () => 'Ignition transformer, 120 V primary, 6,000 V secondary.' + (B.en.ig ? ' It is buzzing.' : ''),
+    pilotcock: () => f.has('pilot_cock') ? 'The pilot gas cock handle is across the pipe.' : 'The pilot gas cock handle is in line with the pipe.',
+    gascock: () => f.has('gas_closed') ? 'The main manual gas valve handle is across the pipe.' : 'The main manual gas valve handle is in line with the pipe.',
+    lgps: () => 'Low gas pressure switch, set at 3.5 in. w.c., manual reset. ' + (B.lgTrip ? 'The reset button is popped out.' : 'The reset button is in.'),
+    hgps: () => 'High gas pressure switch, set at 5.0 in. w.c., manual reset. ' + (B.hgTrip ? 'The reset button is popped out.' : 'The reset button is in.'),
+    reg: () => 'Main gas pressure regulator. The vent is clear.',
+    v1: () => 'Main gas valve V1 actuator. ' + (B.en.v1 ? 'The OPEN indicator shows.' : 'The indicator shows CLOSED.'),
+    v2: () => 'Main gas valve V2 actuator. ' + (B.en.v2 ? 'The OPEN indicator shows.' : 'The indicator shows CLOSED.'),
+    pv: () => 'Pilot solenoid valve. ' + (B.en.pv ? 'It is warm and humming.' : 'It is quiet.'),
+    pump: () => B.pumpRun ? (f.has('coupler') ? 'The pump motor is running. The coupler guard is warm. Through the guard slots the motor shaft spins but the pump shaft does not.' : f.has('air_bound') ? 'The pump is running and you can hear gravel-like rattling in the volute.' : 'The pump is running smoothly.') : B.en.pumpV ? 'The pump motor hums but does not turn. Hot to the touch.' : 'The pump is stopped.',
+    coupler: () => !off ? 'Open the disconnect before you take the coupler guard off.' : f.has('coupler') ? 'With the guard off: the rubber coupler insert is shredded. The motor half spins free.' : 'With the guard off: the coupler is whole and tight.',
+    iso: () => f.has('iso_closed') ? 'The suction isolation valve handle is across the pipe.' : 'Both pump isolation valves have their handles in line with the pipe.',
+    strainer: () => 'Y-strainer on the pump suction. ' + (off && f.has('strainer') ? 'With the cap off: the basket is packed with scale and debris.' : off ? 'With the cap off: the basket is clean.' : 'Isolate and shut off the pump before you open it.'),
+    fs: () => 'Paddle flow switch on the supply pipe. Closes at about 20 gpm.',
+    lwco: () => (B.status().lwLamp ? 'The LOW WATER light is on. ' : 'The LOW WATER light is off. ') + (off && f.has('lwco_dirty') ? 'With the probe pulled: it is thick with scale and sludge.' : off ? 'With the probe pulled: it is clean.' : 'Probe-type low-water cutoff.'),
+    gauge: () => 'Boiler pressure/temperature gauge: ' + B.P.toFixed(0) + ' psi, ' + Math.round(B.Tb) + '°F.',
+    relief: () => 'Pressure relief valve, set at 30 psi. ' + (B.relief === 'discharging' ? 'Water is pouring out of the discharge pipe onto the floor.' : B.relief === 'dripping' ? 'The discharge pipe is dripping steadily.' : 'The discharge pipe is dry.'),
+    exptank: () => off && f.has('tank_logged') ? 'Tapped along its side, the tank sounds full of water top to bottom. A drop of water comes out of the air valve.' : off ? 'Tapped along its side, the top half sounds hollow. The air valve gives air.' : 'Diaphragm expansion tank. Tap it or check the air charge with the system pressure off it.',
+    fill: () => f.has('low_water') ? 'The make-up water valve is closed. The pressure-reducing fill valve is set at 12 psi.' : 'The make-up water valve is open. The pressure-reducing fill valve is set at 12 psi.',
+    vent: () => 'Automatic air vent on the air separator. ' + (f.has('air_bound') ? 'It hisses air when you push the cap.' : 'Quiet.'),
+    stack: () => 'Flue outlet and the analyzer test port.',
+    tubes: () => !off ? 'Open the disconnect before you open the boiler door.' : f.has('tubes_soot') ? 'With the rear door open: the fire tubes are lined with soft black soot.' : 'With the rear door open: the fire tubes are clean.',
+    rm: () => 'Flame safeguard relay module with keyboard display. ' + (B.rmOK() ? '' : 'The display and all LEDs are dark.'),
+    alarm: () => B.en.alarm ? 'The red alarm light is on.' : 'The alarm light is off.',
+    jumper: () => f.has('jmp_lwco') ? 'In the control cabinet, a short wire jumper is screwed across the two low-water cutoff terminals.' : 'No jumpers on the safety terminals.'
+  };
+  return T[k] ? T[k]() : '';
+}

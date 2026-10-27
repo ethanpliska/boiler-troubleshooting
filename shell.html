@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en" data-tab="Unit">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Boiler Troubleshooting</title>
+<style>
+/*CSS*/
+</style>
+<script>
+/* plain old JavaScript on purpose: if the game script cannot run on this browser, say so on screen instead of showing a blank page */
+window.onerror = function (msg, src, line) {
+  try {
+    var d = document.getElementById('bootErr');
+    if (!d) { d = document.createElement('div'); d.id = 'bootErr'; d.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99;background:#7a1d16;color:#fff;font:15px Arial,sans-serif;padding:12px 16px;line-height:1.4';
+      (document.body || document.documentElement).appendChild(d); }
+    d.innerHTML = '<b>The game hit an error on this browser.</b> Send this line to whoever maintains the game:<br>' + String(msg).replace(/</g, '&lt;') + ' (line ' + line + ') &middot; ' + navigator.userAgent.replace(/</g, '&lt;');
+  } catch (e) {}
+};
+</script>
+</head>
+<body>
+<header>
+  <h1>Boiler Troubleshooting<small>Hot-water boiler · power burner · flame safeguard</small></h1>
+  <div id="lvlTabs" role="tablist" aria-label="Levels"></div>
+  <button class="btn" id="viewBtn" type="button" title="Switch between the desktop, phone and smartboard layouts">View: Desktop</button>
+  <span id="bzBox"><button class="btn" id="bzDn" type="button" title="Make everything smaller">Size −</button><button class="btn" id="bzUp" type="button" title="Make everything bigger">Size +</button></span>
+  <button class="btn" id="resetProg" type="button" title="Clear completed levels and start over at level 1">Reset progress</button>
+  <div class="hud"><span id="strikes">Safety strikes<b>0/3</b></span></div>
+</header>
+<main>
+  <section class="left">
+    <div class="tabs">
+      <select id="tabSel" aria-label="Choose a screen"><option value="Unit">Control panel</option><option value="Schem">Ladder schematic</option><option value="Pic">Boiler room</option><option value="Order">Work order</option><option value="Plate">Data plate</option><option value="Spec">Service specs</option></select>
+      <button class="tab on" id="tabUnit" type="button">Control panel</button>
+      <button class="tab" id="tabSchem" type="button">Ladder schematic</button>
+      <button class="tab" id="tabPic" type="button">Boiler room</button>
+      <button class="tab" id="tabOrder" type="button">Work order</button>
+      <button class="tab" id="tabPlate" type="button">Data plate</button>
+      <button class="tab" id="tabSpec" type="button">Service specs</button>
+      <div class="zoom" id="zoomBox"><button class="btn" id="wireTog" type="button" aria-pressed="false">Wires: Off</button>Zoom <button class="zb" id="zOut" type="button" aria-label="Zoom out">−</button><span id="zLbl">100%</span><button class="zb" id="zIn" type="button" aria-label="Zoom in">+</button></div>
+    </div>
+    <div class="view" id="viewUnit">
+      <div class="unitnav" id="unitNav"></div>
+      <div class="scroll" id="unitScroll"><svg id="unitSvg" class="nowires" viewBox="0 0 1100 1660" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Boiler control panel with probe points"></svg></div>
+      <div class="legend"><span><i style="background:var(--red)"></i>Red probe</span><span><i style="background:#fff"></i>Black probe</span><span><i style="background:#e8a33b"></i>Hot side (L1 and switched)</span><span><i style="background:#d0d6dc"></i>Neutral</span><span>Click a terminal to probe.</span></div>
+    </div>
+    <div class="view" id="viewSchem" hidden>
+      <div class="scroll" style="flex:1;min-height:0;overflow:auto"><svg id="schemSvg" class="sch" viewBox="0 0 900 1060" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Ladder schematic of the boiler controls"></svg></div>
+      <div class="legend"><span>All control circuits are 120 V. Left rail: L1 after fuse F1. Right rail: neutral. Numbers on the right are line numbers.</span></div>
+    </div>
+    <div class="view" id="viewPic" hidden><div class="scroll"><svg id="picSvg" viewBox="0 0 1100 760" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Boiler room with burner, gas train, pump and piping"></svg>
+      <div id="picPanel"><div class="pc" id="picSel"><h3>Look closely</h3><p class="dim">Click any part of the boiler room to inspect it.</p></div></div></div></div>
+    <div class="view" id="viewOrder" hidden><div class="scroll"><div class="card" id="ticket" style="max-width:640px;margin:14px"></div></div></div>
+    <div class="view" id="viewPlate" hidden><div class="scroll" id="plateBody"></div></div>
+    <div class="view" id="viewSpec" hidden><div class="scroll" id="specBody"></div></div>
+  </section>
+  <aside>
+    <div class="card" id="cardKdm"><h2>Flame safeguard display</h2>
+      <div id="kdm"><div id="kdm1">---</div><div id="kdm2"></div></div>
+      <div class="leds"><span><u id="ledPow"></u>Power</span><span><u id="ledPilot"></u>Pilot</span><span><u id="ledFlame"></u>Flame</span><span><u id="ledMain"></u>Main</span><span><u id="ledAlarm" class="r"></u>Alarm</span></div>
+      <div class="row" style="margin-top:8px"><button class="btn" id="rmReset" type="button">Reset</button><button class="btn" id="rmHist" type="button">Lockout history</button></div>
+    </div>
+    <div class="card" id="cardCtl">
+      <h2>Boiler controls</h2>
+      <div class="tools">
+        <button class="btn sw on" id="discBtn" type="button">Disconnect <em>ON</em></button>
+        <button class="btn sw on" id="callBtn" type="button">Heating call (building) <em>ON</em></button>
+        <button class="btn sw on" id="bsBtn" type="button">Burner switch <em>ON</em></button>
+        <button class="btn" id="custBtn" type="button">Talk to the customer</button>
+      </div>
+    </div>
+    <div class="card" id="cardStatus"><h2>What you see and hear</h2><div class="status" id="status"></div></div>
+    <div class="card meter" id="cardMeter">
+      <h2>Multimeter</h2>
+      <div id="lcd">---</div>
+      <div id="lcdSub">Place both probes</div>
+      <div class="modes">
+        <button class="mode on" id="mV" type="button">AC Volts</button>
+        <button class="mode" id="mR" type="button">Ohms Ω</button>
+        <button class="mode" id="mD" type="button">DC Volts</button>
+      </div>
+      <div class="probes"><span><button class="pchip" id="chipR" type="button" title="Pick up the red lead, or choose it for the next terminal"><i class="pr r"></i><span id="pRed">—</span></button> <button class="pchip" id="chipK" type="button" title="Pick up the black lead, or choose it for the next terminal"><i class="pr k"></i><span id="pBlk">—</span></button></span><button class="sm" id="clearP" type="button">Clear</button></div>
+      <div class="dim" style="font-size:12px;margin-top:4px;color:#3a3000">Leads stay on until you click the terminal again. Click the red or black lead above to choose which one the next terminal gets.</div>
+    </div>
+    <div class="card" id="cardClamp">
+      <h2>Clamp meter &amp; gauges</h2>
+      <div class="row" style="margin-bottom:6px"><select id="clampSel" aria-label="Clamp location"><option value="pump">Pump motor lead</option><option value="blower">Blower motor lead</option><option value="ign">Ignition transformer lead</option><option value="line">Main line (L1)</option></select><button class="btn" id="clampBtn" type="button">Clamp</button></div>
+      <div class="row" style="margin-bottom:10px;font-family:var(--mono)">Amps: <b id="clampOut">---</b></div>
+      <div class="row" style="margin-bottom:6px"><select id="manoSel" aria-label="Manometer port"><option value="inlet">Manometer: gas inlet port</option><option value="manifold">Manometer: manifold port (after V2)</option><option value="pilot">Manometer: pilot test port</option><option value="air">Manometer: blower static (air switch port)</option></select><button class="btn" id="manoBtn" type="button">Read</button></div>
+      <div class="row" style="margin-bottom:10px;font-family:var(--mono)">Pressure: <b id="manoOut">---</b></div>
+      <div class="row" style="margin-bottom:6px"><select id="pgSel" aria-label="Pump gauge"><option value="dp">Pump suction and discharge gauges</option><option value="ret">Pipe thermometer: return water</option><option value="sup">Pipe thermometer: supply water</option></select><button class="btn" id="pgBtn" type="button">Read</button></div>
+      <div class="row" style="margin-bottom:10px;font-family:var(--mono)"><b id="pgOut">---</b></div>
+      <div class="row"><button class="btn" id="anaBtn" type="button">Combustion analyzer in the stack</button></div>
+      <div id="anaOut" style="font-family:var(--mono);font-size:12.5px;margin-top:6px">---</div>
+    </div>
+    <div class="card" id="cardParts">
+      <h2>Parts and repairs</h2>
+      <div class="row"><select id="partSel" aria-label="Part"></select><button class="btn go" id="installBtn" type="button">Do it</button></div>
+      <div style="color:var(--dim);font-size:12px;margin-top:6px">Open the disconnect before replacing or cleaning anything. Valves, resets and the fill can be done live.</div>
+    </div>
+    <div class="card" id="cardLog"><h2>Job log</h2><div id="log" aria-live="polite"></div>
+      <div class="row" style="margin-top:8px"><button class="btn" id="hintBtn" type="button">Hint</button><button class="btn" id="restartBtn" type="button">Restart level</button></div></div>
+    <div class="card" id="guide"></div>
+  </aside>
+</main>
+<div id="modal" hidden><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
+<script>
+/*JS*/
+</script>
+</body>
+</html>
