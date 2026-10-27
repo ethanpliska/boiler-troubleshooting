@@ -66,14 +66,13 @@ function buildLadder() {
   /* control fuse FU4 feeding the left rail */
   s += SYM.fuse(RAIL_L - 40, 60, 'FU4 3A')[0] + `<path class="w" d="M${RAIL_L + 16} 60 h20 v20 H${RAIL_L} V1010"/>`;
   s += `<path class="w" d="M${RAIL_R} 46 V1010"/>`;
-  /* rung 1: heating call, pump overload contact, pump starter coil; node A feeds the burner */
-  s += rung(130, [['no', 'HEAT CALL'], ['wire', 'A', 120], ['nc', 'OL 95-96'], ['coil', 'PS']], { label: '1' });
-  s += `<text x="${RAIL_L + 300}" y="200" style="font:11px var(--mono);fill:#8fa1b3">PS = pump starter. OL opens on motor overload (manual reset).</text>`;
+  /* rung 1: the pump runs whenever the boiler has power (continuous circulation), through its overload contact */
+  s += rung(130, [['nc', 'OL 95-96'], ['coil', 'PS']], { label: '1' });
+  s += `<text x="${RAIL_L + 20}" y="190" style="font:11px var(--mono);fill:#8fa1b3">PS = pump starter: runs continuously. OL opens on motor overload (manual reset).</text>`;
   /* rung 3: from A through the limit string to terminal 6 */
-  const ax = 330;
-  s += `<path class="w" d="M${ax} 130 V290"/><circle cx="${ax}" cy="130" r="4" fill="#b9c6d3"/>`;
-  s += rung(290, [['no', 'BURNER SW'], ['temp', 'OPER 180°', true], ['temp', 'HI LIM MR', true], ['probe', 'LWCO'], ['flow', 'FLOW SW'], ['rmT', '6']], { from: ax, label: '3' });
-  s += `<text x="${ax + 4}" y="330" style="font:11px var(--mono);fill:#8fa1b3">operating and high limit open on temperature rise</text>`;
+  /* rung 3: the heating call from the building enables the burner through the limit string to terminal 6 */
+  s += rung(290, [['no', 'HEAT CALL'], ['no', 'BURNER SW'], ['temp', 'OPER 180°', true], ['temp', 'HI LIM MR', true], ['probe', 'LWCO'], ['flow', 'FLOW SW'], ['rmT', '6']], { label: '3' });
+  s += `<text x="${RAIL_L + 20}" y="330" style="font:11px var(--mono);fill:#8fa1b3">operating and high limit open on temperature rise</text>`;
   /* rung 4: lockout interlocks 6 to 7 */
   s += rung(390, [['rmT', '6'], ['press', 'LGPS (MR)'], ['press', 'HGPS (MR)', true], ['press', 'AIR SW'], ['rmT', '7']], { from: 180, to: 780, label: '4' });
   s += `<text x="180" y="430" style="font:11px var(--mono);fill:#8fa1b3">gas pressure switches are manual reset. 6 and 7 are inputs to the relay module.</text>`;

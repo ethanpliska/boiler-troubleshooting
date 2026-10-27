@@ -36,10 +36,15 @@
   ok(B.ohms('FU_IN', 'FU_OUT') === Infinity, 'open fuse reads OL');
   ok(B.volts('LN_L1', 'LN_L2') > 190, 'line side is still live with the disconnect off');
   B.reset([], 1, { pre: 20 }); B.disc = false; B.tick(0.1);
-  ok(Math.abs(B.ohms('PS_A', 'PS_B') - 241) < 6, 'pump starter coil reads in parallel with the relay module while the heating call is closed, got ' + B.ohms('PS_A', 'PS_B').toFixed(0));
-  B.call = false;
-  ok(Math.abs(B.ohms('PS_A', 'PS_B') - 260) < 5, 'pump starter coil isolated ~260 ohms, got ' + B.ohms('PS_A', 'PS_B').toFixed(0));
-  B.call = true;
+  ok(Math.abs(B.ohms('PS_A', 'PS_B') - 241) < 6, 'pump starter coil reads in parallel with the relay module through the overload contact, got ' + B.ohms('PS_A', 'PS_B').toFixed(0));
+  B.olTrip = true;
+  ok(Math.abs(B.ohms('PS_A', 'PS_B') - 260) < 5, 'pump starter coil isolated ~260 ohms when the overload contact is open, got ' + B.ohms('PS_A', 'PS_B').toFixed(0));
+  B.olTrip = false;
+  /* continuous circulation: the pump keeps running with the heating call off, and the burner is disabled */
+  B.reset([], 4, { pre: 60 }); B.call = false; run(60);
+  ok(B.pumpRun && B.flow > 50, 'pump keeps running with the heating call off');
+  ok(!B.main && ['STANDBY', 'POST'].indexOf(B.rm.st) >= 0, 'burner is disabled with the heating call off, got ' + B.rm.st);
+  B.reset([], 1, { pre: 20 }); B.disc = false; B.tick(0.1);
   const w = ['PM_T1,PM_T2', 'PM_T2,PM_T3', 'PM_T3,PM_T1'].map(pr => B.ohms(pr.split(',')[0], pr.split(',')[1]));
   ok(w.every(x => Math.abs(x - 4.8) < 0.3), 'pump windings in delta read equal (~4.8 ohms), got ' + w.map(x => x.toFixed(2)).join(' '));
   /* a blown leg fuse: the pump hums, the dead leg shows about half voltage by back-feed, the overload trips */

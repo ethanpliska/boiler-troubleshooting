@@ -25,9 +25,9 @@ const NODES = {
   PS_L1: 'Pump starter L1 (line)', PS_L2: 'Pump starter L2 (line)', PS_L3: 'Pump starter L3 (line)',
   PS_T1: 'Pump starter T1 (to motor)', PS_T2: 'Pump starter T2 (to motor)', PS_T3: 'Pump starter T3 (to motor)',
   PS_A: 'Pump starter coil A', PS_B: 'Pump starter coil B (neutral)',
-  OL_95: 'Pump overload contact 95 (NC, in)', OL_96: 'Pump overload contact 96 (NC, out to coil)',
+  OL_95: 'Pump overload contact 95 (NC, in from the 120 V bus)', OL_96: 'Pump overload contact 96 (NC, out to coil)',
   PM_T1: 'Pump motor T1', PM_T2: 'Pump motor T2', PM_T3: 'Pump motor T3',
-  EN_1: 'Heating call contact (building controls), in', EN_2: 'Heating call contact (building controls), out',
+  EN_1: 'Heating call contact (building controls), in', EN_2: 'Heating call contact (building controls), out (burner enable)',
   BS_1: 'Burner switch, in', BS_2: 'Burner switch, out',
   OC_1: 'Operating aquastat, in', OC_2: 'Operating aquastat, out',
   HL_1: 'High limit (manual reset), in', HL_2: 'High limit (manual reset), out',
@@ -53,7 +53,7 @@ const NETS = [
   ['LN_L1'], ['LN_L2'], ['LN_L3'], ['F1_IN'], ['F2_IN'], ['F3_IN'],
   ['F1_OUT', 'XF_H1', 'M1_L1', 'PS_L1'], ['F2_OUT', 'XF_H2', 'M1_L2', 'PS_L2'], ['F3_OUT', 'M1_L3', 'PS_L3'],
   ['M1_T1', 'BM_T1'], ['M1_T2', 'BM_T2'], ['M1_T3', 'BM_T3'], ['PS_T1', 'PM_T1'], ['PS_T2', 'PM_T2'], ['PS_T3', 'PM_T3'],
-  ['XF_X1', 'FU_IN'], ['FU_OUT', 'EN_1', 'RM_L1'], ['EN_2', 'OL_95', 'BS_1'], ['OL_96', 'PS_A'],
+  ['XF_X1', 'FU_IN'], ['FU_OUT', 'EN_1', 'RM_L1', 'OL_95'], ['EN_2', 'BS_1'], ['OL_96', 'PS_A'],
   ['BS_2', 'OC_1'], ['OC_2', 'HL_1'], ['HL_2', 'LW_1'], ['LW_2', 'FS_1'], ['FS_2', 'RM_6', 'LG_1'], ['LG_2', 'HG_1'], ['HG_2', 'AP_1'], ['AP_2', 'RM_7'],
   ['RM_3', 'M1_A'], ['RM_4', 'AL_1'], ['RM_8', 'PV_1'], ['RM_9', 'V1_1', 'V2_1'], ['RM_10', 'IG_1'],
   ['XF_X2', 'NB', 'GND', 'PS_B', 'M1_B', 'RM_L2', 'AL_2', 'PV_2', 'V1_2', 'V2_2', 'IG_2'],
@@ -1193,14 +1193,13 @@ function buildLadder() {
   /* control fuse FU4 feeding the left rail */
   s += SYM.fuse(RAIL_L - 40, 60, 'FU4 3A')[0] + `<path class="w" d="M${RAIL_L + 16} 60 h20 v20 H${RAIL_L} V1010"/>`;
   s += `<path class="w" d="M${RAIL_R} 46 V1010"/>`;
-  /* rung 1: heating call, pump overload contact, pump starter coil; node A feeds the burner */
-  s += rung(130, [['no', 'HEAT CALL'], ['wire', 'A', 120], ['nc', 'OL 95-96'], ['coil', 'PS']], { label: '1' });
-  s += `<text x="${RAIL_L + 300}" y="200" style="font:11px var(--mono);fill:#8fa1b3">PS = pump starter. OL opens on motor overload (manual reset).</text>`;
+  /* rung 1: the pump runs whenever the boiler has power (continuous circulation), through its overload contact */
+  s += rung(130, [['nc', 'OL 95-96'], ['coil', 'PS']], { label: '1' });
+  s += `<text x="${RAIL_L + 20}" y="190" style="font:11px var(--mono);fill:#8fa1b3">PS = pump starter: runs continuously. OL opens on motor overload (manual reset).</text>`;
   /* rung 3: from A through the limit string to terminal 6 */
-  const ax = 330;
-  s += `<path class="w" d="M${ax} 130 V290"/><circle cx="${ax}" cy="130" r="4" fill="#b9c6d3"/>`;
-  s += rung(290, [['no', 'BURNER SW'], ['temp', 'OPER 180°', true], ['temp', 'HI LIM MR', true], ['probe', 'LWCO'], ['flow', 'FLOW SW'], ['rmT', '6']], { from: ax, label: '3' });
-  s += `<text x="${ax + 4}" y="330" style="font:11px var(--mono);fill:#8fa1b3">operating and high limit open on temperature rise</text>`;
+  /* rung 3: the heating call from the building enables the burner through the limit string to terminal 6 */
+  s += rung(290, [['no', 'HEAT CALL'], ['no', 'BURNER SW'], ['temp', 'OPER 180°', true], ['temp', 'HI LIM MR', true], ['probe', 'LWCO'], ['flow', 'FLOW SW'], ['rmT', '6']], { label: '3' });
+  s += `<text x="${RAIL_L + 20}" y="330" style="font:11px var(--mono);fill:#8fa1b3">operating and high limit open on temperature rise</text>`;
   /* rung 4: lockout interlocks 6 to 7 */
   s += rung(390, [['rmT', '6'], ['press', 'LGPS (MR)'], ['press', 'HGPS (MR)', true], ['press', 'AIR SW'], ['rmT', '7']], { from: 180, to: 780, label: '4' });
   s += `<text x="180" y="430" style="font:11px var(--mono);fill:#8fa1b3">gas pressure switches are manual reset. 6 and 7 are inputs to the relay module.</text>`;
@@ -1327,7 +1326,7 @@ const GUIDE = [['Any two legs (L1-L2, L2-L3, L3-L1)', '≈ 208 V'], ['Any leg to
   ['Boiler pressure, cold / at 180°F', '12 / about 20 psi'], ['Pump differential', '≈ 9.4 psi'], ['Pump motor current, each leg', '≈ 3.3 A'], ['Blower motor current, each leg', '≈ 2.6 A']];
 function buildSpecs() {
   const t = (h, rows) => `<h3>${h}</h3><table><tr><th>Item</th><th>Value</th></tr>` + rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('') + '</table>';
-  return t('Electrical', [['Supply', '208 V, 3 phase, 60 Hz (120 V leg to ground)'], ['Disconnect fuses F1–F3', '15 A'], ['Control transformer', '208 V primary (L1-L2), 120 V secondary, X2 grounded'], ['Control fuse FU4', '3 A'], ['Burner blower motor', '3/4 hp, 2.6 A per leg running'], ['Circulating pump motor', '1 hp, 3.3 A per leg running'], ['Pump overload', 'manual reset, set 3.6 A'], ['Locked rotor (motor humming)', 'about 14–17 A'], ['Ignition transformer', '120 V primary, about 1.3 A'], ['Contactor coils and valve coils', '120 V']]) +
+  return t('Electrical', [['Supply', '208 V, 3 phase, 60 Hz (120 V leg to ground)'], ['Circulating pump', 'runs continuously whenever the boiler has power'], ['Heating call (building controls)', 'enables the burner only'], ['Disconnect fuses F1–F3', '15 A'], ['Control transformer', '208 V primary (L1-L2), 120 V secondary, X2 grounded'], ['Control fuse FU4', '3 A'], ['Burner blower motor', '3/4 hp, 2.6 A per leg running'], ['Circulating pump motor', '1 hp, 3.3 A per leg running'], ['Pump overload', 'manual reset, set 3.6 A'], ['Locked rotor (motor humming)', 'about 14–17 A'], ['Ignition transformer', '120 V primary, about 1.3 A'], ['Contactor coils and valve coils', '120 V']]) +
     t('Flame safeguard sequence (this game runs it at 2× speed)', [['Initiate after power-up', '10 s'], ['Prepurge (blower on, airflow proven within 10 s)', '30 s'], ['Pilot flame establishing period, PFEP (ignition + pilot)', '10 s'], ['Main flame establishing period, MFEP (pilot + main)', '10 s'], ['Run (main valves only, interrupted pilot)', 'until the limits open'], ['Postpurge', '15 s'], ['Flame signal to prove flame', '1.25 V dc minimum'], ['Normal flame signal, pilot / main', '2 – 3 / 3.5 – 4.5 V dc']]) +
     t('Gas train (natural gas)', [['Inlet pressure', '7 in. w.c. (6.5 firing)'], ['Manifold pressure, full fire', '3.5 in. w.c.'], ['Pilot pressure', '3.0 in. w.c.'], ['Low gas pressure switch (manual reset)', 'opens below 3.5 in. w.c.'], ['High gas pressure switch (manual reset)', 'opens above 5.0 in. w.c.'], ['Air proving switch', 'closes at 0.5 in. w.c.'], ['Blower static at the switch port', 'about 1.4 in. w.c.']]) +
     t('Combustion (flue gas at the stack)', [['O2', '3 – 6 %'], ['CO2', '8.5 – 10 %'], ['CO, as measured', 'under 100 ppm'], ['Stack temperature', '380 – 450°F'], ['Combustion efficiency', 'about 82 %']]) +
@@ -1558,7 +1557,7 @@ function startLevel(i) {
   sheet(`<div class="kick">Level ${l.n} · ${esc(l.rank)}</div><h3>${esc(l.title)}</h3><p style="color:var(--dim)">${esc(l.site)}</p><p>${esc(l.ticket)}</p>
     <p style="color:var(--dim);font-size:13px">Tools: multimeter (AC volts, ohms, DC volts for the flame signal), clamp meter, manometer, pump gauges, pipe thermometers and a combustion analyzer. Open the disconnect before any ohm reading or repair.</p>
     <div class="row"><button class="btn" id="custBtn0" type="button">Talk to the customer first</button><button class="btn go" id="goBtn" type="button">Start job</button></div>`);
-  $('goBtn').onclick = () => { closeSheet(); active = true; t0 = Date.now(); log('On site. The building controls are calling for heat.'); };
+  $('goBtn').onclick = () => { closeSheet(); active = true; t0 = Date.now(); log('On site. The pump runs all the time, and the building controls are calling for heat.'); };
   $('custBtn0').onclick = () => { $('goBtn').onclick(); custSheet(); };
 }
 function endLevel(win, msg) {
@@ -1662,7 +1661,7 @@ function init() {
   $('clearP').onclick = () => { probes = { red: null, black: null }; probeSel = null; measure(false); };
   $('wireTog').onclick = () => { const on = $('unitSvg').classList.toggle('nowires'); $('wireTog').textContent = 'Wires: ' + (on ? 'Off' : 'On'); $('wireTog').setAttribute('aria-pressed', String(!on)); };
   $('discBtn').onclick = () => { if (!active) return; B.disc = !B.disc; log(B.disc ? 'Disconnect closed. Power is on.' : 'Disconnect opened. Power is off to the boiler controls (the line side is still live).'); B.tick(0.01); updateStatus(); measure(false); };
-  $('callBtn').onclick = () => { if (!active) return; B.call = !B.call; log('Heating call from the building controls ' + (B.call ? 'ON.' : 'OFF.')); B.tick(0.01); updateStatus(); measure(false); };
+  $('callBtn').onclick = () => { if (!active) return; B.call = !B.call; log('Heating call from the building controls ' + (B.call ? 'ON. The burner is enabled.' : 'OFF. The burner is disabled; the pump keeps running.')); B.tick(0.01); updateStatus(); measure(false); };
   $('bsBtn').onclick = () => { if (!active) return; B.burnerSw = !B.burnerSw; log('Burner switch ' + (B.burnerSw ? 'ON.' : 'OFF.')); B.tick(0.01); updateStatus(); measure(false); };
   $('custBtn').onclick = custSheet; $('rmReset').onclick = rmReset; $('rmHist').onclick = rmHistory;
   $('clampBtn').onclick = clamp; $('manoBtn').onclick = mano; $('pgBtn').onclick = pumpGauge; $('anaBtn').onclick = analyzer;

@@ -21,6 +21,8 @@ part artwork, copied unchanged so both panels look alike), levels.js (22 levels)
 game, copied as-is) + boiler.css (additions).
 
 ## How the simulation works
+- The circulating pump runs continuously whenever the boiler has power (PS coil fed from the 120 V bus through the
+  overload); the building heating call only enables the burner (it is the first contact in the limit string).
 - Power: 208 V 3-phase wye (120 V leg to ground) → fused disconnect F1–F3 → blower contactor M1 (coil from RM 3) to a
   3-phase blower, pump starter PS with overload (95-96 NC in the coil circuit, manual reset) to a 3-phase pump, and a
   208/120 V control transformer on L1-L2 → FU4 → the 120 V control circuit (X2 grounded).
