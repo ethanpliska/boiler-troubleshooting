@@ -1,14 +1,14 @@
 /* ===== Boiler room picture: piping, pump, gas train, burner and stack. Click a part to look at it closely. ===== */
 const PIC_W = 1100, PIC_H = 760;
 const SPOTS = {
-  burner: [250, 470, 'Burner'], blower: [215, 420, 'Blower'], damper: [205, 515, 'Air damper'], aps: [262, 372, 'Air switch'],
+  burner: [250, 470, 'Burner'], blower: [215, 420, 'Blower'], filter: [205, 515, 'Air filter'], aps: [262, 372, 'Combustion airflow switch'], vfd: [80, 250, 'VFD'],
   sight: [312, 470, 'Sight glass'], scanner: [300, 430, 'UV scanner'], electrode: [292, 512, 'Ignition electrode'], ignx: [228, 560, 'Ignition xfmr'],
-  gascock: [42, 652, 'Main gas cock'], reg: [92, 652, 'Gas regulator'], lgps: [140, 612, 'Low gas sw.'], v1: [178, 652, 'Main valve V1'], v2: [220, 652, 'Main valve V2'],
-  hgps: [258, 612, 'High gas sw.'], pilotcock: [128, 576, 'Pilot cock'], pv: [176, 576, 'Pilot valve'],
-  stack: [725, 210, 'Stack / analyzer port'], tubes: [560, 470, 'Fire tubes'], gauge: [420, 270, 'P/T gauge'], relief: [520, 262, 'Relief valve'],
-  lwco: [790, 400, 'Low-water cutoff'], fs: [850, 126, 'Flow switch'], vent: [960, 92, 'Air vent'], exptank: [960, 300, 'Expansion tank'],
-  fill: [1044, 212, 'Make-up water'], pump: [900, 612, 'Pump'], coupler: [930, 642, 'Pump coupler'], iso: [1010, 612, 'Isolation valves'], strainer: [968, 650, 'Strainer'],
-  rm: [118, 186, 'Control cabinet'], alarm: [118, 104, 'Alarm light'], jumper: [150, 250, 'Cabinet terminals']
+  gascock: [42, 652, 'Manual gas valves'], lgps: [140, 612, 'Low gas sw.'], v1: [178, 652, 'SKP75 main valve'], vent: [199, 690, 'Vent valve'], v2: [220, 652, 'Secondary valve'],
+  hgps: [258, 612, 'High gas sw.'], pilotcock: [128, 576, 'Pilot cock'], pv: [176, 576, 'Pilot valve V4046'],
+  stack: [725, 210, 'Stack / analyzer port'], tubes: [560, 470, 'Heat exchanger'], gauge: [420, 270, 'P/T gauge'], relief: [520, 262, 'Relief valve'],
+  lwco: [790, 400, 'Low-water cutoff'], fs: [850, 126, 'Flow switch FS4-3'], vent2: [960, 92, 'Air vent'], exptank: [960, 300, 'Expansion tank'],
+  fill: [1044, 212, 'Make-up water'], pump: [900, 612, 'System pump'], coupler: [930, 642, 'Pump coupler'], iso: [1010, 612, 'Isolation valves'], strainer: [968, 650, 'Strainer'],
+  rm: [118, 186, 'Control panel'], alarm: [118, 104, 'Alarm light'], jumper: [150, 250, 'Cabinet terminals']
 };
 function buildPic() {
   let s = `<defs><linearGradient id="gJk" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#9b2d22"/><stop offset="1" stop-color="#5e1a14"/></linearGradient>
@@ -21,7 +21,7 @@ function buildPic() {
   s += `<rect x="700" y="40" width="50" height="270" fill="#6b7682" stroke="#4a545e"/><circle cx="725" cy="210" r="6" fill="#222"/><text class="pl" x="760" y="60">Flue</text>`;
   /* boiler shell */
   s += `<rect x="330" y="300" width="440" height="340" rx="22" fill="url(#gJk)" stroke="#3a0f0b" stroke-width="3"/><rect x="350" y="320" width="400" height="300" rx="14" fill="none" stroke="#c2513f" stroke-opacity=".35"/>`;
-  s += `<text class="sl" x="590" y="420" text-anchor="middle">HOT WATER BOILER · 1,000 MBH</text>`;
+  s += `<text class="sl" x="590" y="420" text-anchor="middle">THERMAL SOLUTIONS EVA-3000 · 3,000 MBH</text>`;
   s += `<path d="M380 640 v40 M720 640 v40" stroke="#2b333c" stroke-width="16"/><rect x="360" y="680" width="380" height="20" fill="#2b333c"/>`;
   /* supply: up from the boiler, across the top to the building */
   s += `<path d="M460 300 V120 H1100" stroke="url(#gPipe)" stroke-width="22" fill="none"/><path id="supFlow" d="M460 300 V120 H1100" stroke="#e86b4a" stroke-width="3" fill="none" stroke-dasharray="8 20" opacity="0"/>`;

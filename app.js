@@ -18,26 +18,28 @@ function sheet(html) { $('sheet').className = 'sheet'; $('sheet').innerHTML = ht
 const closeSheet = () => { $('modal').hidden = true; };
 
 /* ---------- normal readings and specs ---------- */
-const GUIDE = [['Any two legs (L1-L2, L2-L3, L3-L1)', '≈ 208 V'], ['Any leg to ground', '≈ 120 V'], ['Control transformer X1 to X2', '≈ 120 V'], ['Across a closed switch, power on', '0 V'], ['Across an open switch in a live string', '≈ 120 V'],
-  ['Flame signal, pilot', '2.0 – 3.0 V dc'], ['Flame signal, main', '3.5 – 4.5 V dc'], ['Minimum to prove flame', '1.25 V dc'],
-  ['Gas inlet, natural gas', '6.5 – 7.5 in. w.c.'], ['Manifold, full fire', '3.5 in. w.c.'], ['Blower static at the air switch', '≈ 1.4 in. w.c.'],
-  ['Boiler pressure, cold / at 180°F', '12 / about 20 psi'], ['Pump differential', '≈ 9.4 psi'], ['Pump motor current, each leg', '≈ 3.3 A'], ['Blower motor current, each leg', '≈ 2.6 A']];
+const GUIDE = [['Any two legs (L1-L2, L2-L3, L3-L1)', '≈ 208 V'], ['Any leg to ground', '≈ 120 V'], ['Control transformer X1 to X2 (TB1 to TB2)', '≈ 115 V'],
+  ['Across a closed switch, power on', '0 V'], ['Across an open switch in a live string', '≈ 115 V'],
+  ['Flame signal, pilot and main (UV)', '1.5 – 5.0 V dc'], ['Minimum to prove flame (RM7896)', '1.25 V dc'],
+  ['Gas inlet (natural gas)', '6.0 in. w.c. min, 5 psi max'], ['Combustion air at the airflow switch, low / high fire', '≈ 0.4 / 2.0 in. w.c.'],
+  ['Boiler pressure, cold / at 180°F', '15 / about 23 psi'], ['System pump differential', '≈ 18 psi'], ['System pump current, each leg', '≈ 13.6 A'], ['Blower (VFD output), high fire', '≈ 6.6 A']];
 function buildSpecs() {
   const t = (h, rows) => `<h3>${h}</h3><table><tr><th>Item</th><th>Value</th></tr>` + rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('') + '</table>';
-  return t('Electrical', [['Supply', '208 V, 3 phase, 60 Hz (120 V leg to ground)'], ['Circulating pump', 'runs continuously whenever the boiler has power'], ['Heating call (building controls)', 'enables the burner only'], ['Disconnect fuses F1–F3', '15 A'], ['Control transformer', '208 V primary (L1-L2), 120 V secondary, X2 grounded'], ['Control fuse FU4', '3 A'], ['Burner blower motor', '3/4 hp, 2.6 A per leg running'], ['Circulating pump motor', '1 hp, 3.3 A per leg running'], ['Pump overload', 'manual reset, set 3.6 A'], ['Locked rotor (motor humming)', 'about 14–17 A'], ['Ignition transformer', '120 V primary, about 1.3 A'], ['Contactor coils and valve coils', '120 V']]) +
-    t('Flame safeguard sequence (this game runs it at 2× speed)', [['Initiate after power-up', '10 s'], ['Prepurge (blower on, airflow proven within 10 s)', '30 s'], ['Pilot flame establishing period, PFEP (ignition + pilot)', '10 s'], ['Main flame establishing period, MFEP (pilot + main)', '10 s'], ['Run (main valves only, interrupted pilot)', 'until the limits open'], ['Postpurge', '15 s'], ['Flame signal to prove flame', '1.25 V dc minimum'], ['Normal flame signal, pilot / main', '2 – 3 / 3.5 – 4.5 V dc']]) +
-    t('Gas train (natural gas)', [['Inlet pressure', '7 in. w.c. (6.5 firing)'], ['Manifold pressure, full fire', '3.5 in. w.c.'], ['Pilot pressure', '3.0 in. w.c.'], ['Low gas pressure switch (manual reset)', 'opens below 3.5 in. w.c.'], ['High gas pressure switch (manual reset)', 'opens above 5.0 in. w.c.'], ['Air proving switch', 'closes at 0.5 in. w.c.'], ['Blower static at the switch port', 'about 1.4 in. w.c.']]) +
-    t('Combustion (flue gas at the stack)', [['O2', '3 – 6 %'], ['CO2', '8.5 – 10 %'], ['CO, as measured', 'under 100 ppm'], ['Stack temperature', '380 – 450°F'], ['Combustion efficiency', 'about 82 %']]) +
-    t('Water side', [['Operating aquastat', 'opens 180°F, closes 165°F'], ['High limit (manual reset)', '210°F'], ['Cold fill pressure', '12 psi'], ['Pressure at 180°F', 'about 20 psi'], ['Relief valve', '30 psi'], ['Design flow / ΔT', '80 gpm / about 20°F at full load'], ['Pump differential', 'about 9.4 psi'], ['Flow switch', 'closes at about 20 gpm']]) +
-    `<p>Values not taken from a specific manufacturer's literature are typical for a 1,000 MBH commercial hot-water boiler with an on/off power burner. Confirm against the equipment on your site.</p>`;
+  return t('Electrical (EVA-3000, 208/60/3)', [['Supply', '208 V, 3 phase, 60 Hz (120 V leg to ground)'], ['Nominal power draw', '7.4 A'], ['Combustion blower', '2 hp, 3 phase, on a variable frequency drive'], ['Control transformer', '208 V tap to 115 V, two primary fuses FU1, X2 grounded'], ['Control circuit breaker', '115 V, trips at about 5 A'], ['Flame safeguard', 'Honeywell RM7896D, 30 s purge card, R7849A UV amplifier'], ['Operating limit', 'Siemens RWF55, factory setpoint 180°F'], ['High limit', 'Honeywell L4008E, manual reset, set 210°F (max 240°F)'], ['System pump (by others)', '5 hp, 208 V 3 phase, runs continuously from TB3'], ['Do not connect low-voltage controls directly', 'use isolating relays (manual, Electrical section)']]) +
+    t('Sequence of operation (manual section VI; this game runs it at 2× speed)', [['Standby', 'limits closed, no flame signal, airflow switch open'], ['Call for heat', 'terminal 6 powered; terminal 4 starts the blower (CRA1 → VFD)'], ['Combustion airflow switch makes', 'must prove within 10 s'], ['Prepurge', '30 s'], ['Pilot trial (PFEP)', 'pilot valve + ignition; ignition off after 5 s (early spark termination)'], ['Pilot proven', 'flame signal above 1.5 V dc'], ['Main flame (MFEP)', 'main valves (terminal 9) open, pilot stays on 5 s'], ['Run', 'pilot off; TD-1 releases modulation 20 s after terminal 9 (CRA2)'], ['Postpurge', 'fan runs 60 s after the main valves close']]) +
+    t('Gas train (DB&B, figure 22e)', [['Inlet pressure', '6.0 in. w.c. minimum, 5 psi maximum (natural gas)'], ['Order', 'manual valve (pilot tapping) → low gas switch → SKP75 main valve → vent valve → secondary valve → high gas switch → manual valve → burner'], ['Low gas pressure switch', 'manual reset, set 5.0 in. w.c. (assumed)'], ['High gas pressure switch', 'manual reset, set 3.0 in. w.c. downstream (assumed)'], ['Main valve pressure, low / high fire', 'about 0.4 / 2.0 in. w.c. (match the firetest label)'], ['Pilot', 'V4046 solenoid, pilot regulator, about 3.0 in. w.c.'], ['Gas connection', '2 in. NPT']]) +
+    t('Combustion (flue gas at the stack)', [['O2', 'about 4.5 – 5.5 % (match the firetest report)'], ['CO', 'keep well under 400 ppm (manual limit)'], ['Stack temperature', 'about 250 – 320°F'], ['Efficiency', 'about 87 % (2,610 MBH out / 3,000 in)'], ['Burner element', 'evenly orange, no flicker']]) +
+    t('Water side (EVA-3000)', [['Input / gross output / net AHRI', '3,000 / 2,610 / 2,270 MBH'], ['Water volume', '43.1 gal'], ['Flow, 20°F ΔT / 40°F ΔT', '261 gpm (4.41 ft) / 131 gpm (1.73 ft)'], ['Minimum / maximum flow', '131 / 261 gpm'], ['Supply / return pipe', '4 in.'], ['Flow switch FS4-3', 'makes at about 110 gpm (assumed)'], ['RWF55 burner on / off', '175°F / 185°F (assumed switching points)'], ['Max allowable working pressure', '160 psi'], ['Relief valve', 'set at time of purchase (50 psi assumed)'], ['Cold fill / at 180°F', '15 / about 23 psi']]) +
+    `<p>From the Thermal Solutions EVA I&O manual 81456001 R12-6/16 (EVA-3000 data, Figure 9c wiring). Items marked assumed are not in the manual; confirm against your boiler's rating label and firetest report.</p>`;
 }
 function buildPlate() {
-  return `<div class="plate"><h3>Hot water boiler</h3><div class="plm">Model HWB-1000 · Serial 24B-1187</div>
-    <div class="plr">Input: 1,000,000 Btu/h natural gas</div><div class="plr">Gross output: 820,000 Btu/h</div>
-    <div class="plr">Max. allowable working pressure: 80 psi water</div><div class="plr">Relief valve setting: 30 psi</div>
-    <div class="plr">Max. water temperature: 250°F</div><div class="plr">Manifold pressure: 3.5 in. w.c. · Min. inlet: 5.0 in. w.c.</div>
-    <div class="plr">Electrical: 208 V, 3 ph, 60 Hz · Burner motor 2.9 FLA</div><div class="plr">Control circuit: 120 V</div></div>
-    <div class="plate"><h3>Circulating pump</h3><div class="plm">In-line, close-coupled</div><div class="plr">80 gpm at 22 ft head</div><div class="plr">1 hp · 208 V · 3 ph · 3.6 FLA</div></div>`;
+  return `<div class="plate"><h3>Thermal Solutions</h3><div class="plm">Model EVA3000BN1-UEBM · Serial 65055391</div>
+    <div class="plr">Input: 3,000,000 Btu/h natural gas</div><div class="plr">Gross output: 2,610 MBH · Net AHRI: 2,270 MBH</div>
+    <div class="plr">Max. allowable working pressure: 160 psi water</div><div class="plr">Relief valve setting: 50 psi</div>
+    <div class="plr">Water volume: 43.1 gal</div><div class="plr">Gas inlet: 6.0 in. w.c. min · 5 psi max</div>
+    <div class="plr">Electrical: 208 V, 3 ph, 60 Hz · 7.4 A · blower 2 hp</div><div class="plr">Control circuit: 115 V</div>
+    <div class="dim">Relief setting is chosen when the boiler is ordered; 50 psi is assumed here.</div></div>
+    <div class="plate"><h3>System pump (by others)</h3><div class="plm">In-line, close-coupled</div><div class="plr">200 gpm at 41 ft head</div><div class="plr">5 hp · 208 V · 3 ph · 15.2 FLA</div></div>`;
 }
 
 /* ---------- screens ---------- */
@@ -67,8 +69,10 @@ function updateStatus() {
   const noise = B.main && B.lowWater() ? 'Banging and kettling in the boiler' : B.has('air_bound') && B.pumpRun ? 'Gurgling in the pipes' : '';
   $('status').innerHTML =
     row('Sight glass', FLAME_TXT[s.flame], s.flame === 'main' ? 'ok' : s.flame === 'none' ? '' : 'warn') +
-    row('Burner blower', s.blower === 'run' ? 'Running' : s.blower === 'hum' ? 'Humming, not turning' : 'Stopped', s.blower === 'hum' ? 'bad' : '') +
-    row('Pump', s.pump === 'run' ? 'Running' : s.pump === 'hum' ? 'Humming, not turning' : 'Stopped', s.pump === 'hum' ? 'bad' : '') +
+    row('Burner blower', s.blower === 'run' ? 'Running' : 'Stopped') +
+    row('System pump', s.pump === 'run' ? 'Running' : s.pump === 'hum' ? 'Humming, not turning' : 'Stopped', s.pump === 'hum' ? 'bad' : '') +
+    row('Burner switch light', s.burnerLamp ? 'ON' : 'off') +
+    row('CHANGE FILTER light', s.filterLamp ? 'ON' : 'off', s.filterLamp ? 'warn' : '') +
     row('Alarm light', s.alarm ? 'ON' : 'off', s.alarm ? 'bad' : '') +
     row('LOW WATER light', s.lwLamp ? 'ON' : 'off', s.lwLamp ? 'warn' : '') +
     row('Boiler gauge', Math.round(s.Tb) + '°F · ' + s.P.toFixed(0) + ' psi') +
@@ -97,9 +101,9 @@ function updateStatus() {
   setSwitches();
 }
 
-/* contactors pull in, LEDs and lamps on the panel follow the boiler */
+/* contactors and relays pull in; displays, LEDs and lamps on the panel follow the boiler */
 function syncPanel(s, pow) {
-  const st = { m1: !!B.en.m1, ps: !!B.en.ps }, NAME = { m1: 'M1', ps: 'PUMP' };
+  const st = { ps: !!B.en.ps, cra1: !!B.en.cra1, cra2: !!B.en.cra2 }, NAME = { ps: 'PUMP' };
   document.querySelectorAll('#unitSvg [data-k]').forEach(el => {
     const k = el.dataset.k, on = !!st[k], c = el.classList;
     if (c.contains('armg') || c.contains('armp')) {
@@ -107,13 +111,24 @@ function syncPanel(s, pow) {
       if (was !== el.dataset.on) el.style.transition = on ? 'transform .09s cubic-bezier(.6,0,1,.55)' : 'transform .22s cubic-bezier(.2,1.35,.5,1)';
       el.style.transform = c.contains('armg') ? (on ? 'translateY(0)' : 'translateY(-26px)') : (on ? 'translateX(0)' : 'translateX(-7px)');
     } else if (c.contains('coilglow')) el.setAttribute('opacity', on ? 0.45 : 0);
+    else if (c.contains('rblade')) el.style.transform = on ? 'rotate(' + el.dataset.rot + 'deg)' : 'none';
     else if (c.contains('kled')) el.setAttribute('fill', on ? '#38e08a' : '#55616d');
-    else if (c.contains('kbadge')) el.textContent = NAME[k] + (on ? ' CLOSED' : ' OPEN');
+    else if (c.contains('kbadge')) el.textContent = (NAME[k] || k.toUpperCase()) + (on ? ' CLOSED' : ' OPEN');
   });
   const led = { POWER: pow, PILOT: pow && B.out(8), FLAME: pow && B.sig >= FLAME_MIN, MAIN: pow && B.out(9), ALARM: pow && B.rm.st === 'LOCKOUT' };
   document.querySelectorAll('#unitSvg .pled').forEach(el => { const k = el.dataset.led; el.setAttribute('fill', led[k] ? (k === 'ALARM' ? '#ff3b2e' : '#38e08a') : '#3b4652'); });
-  const lw = $('pnlLwLamp'); if (lw) lw.setAttribute('fill', s.lwLamp ? '#ffb020' : '#3a2a1a');
-  [['pnlV1', B.en.v1], ['pnlV2', B.en.v2]].forEach(v => { const e = $(v[0]); if (e) { e.textContent = v[1] ? 'OPEN' : 'CLOSED'; e.style.fill = v[1] ? '#38e08a' : '#e5483b'; } });
+  const set = (id, a, v) => { const e = $(id); if (e) e.setAttribute(a, v); }, txt = (id, v, col) => { const e = $(id); if (e) { e.textContent = v; if (col) e.style.fill = col; } };
+  set('pnlLwLamp', 'fill', s.lwLamp ? '#ffb020' : '#3a2a1a');
+  set('pnlBsLamp', 'fill', s.burnerLamp ? '#f5c400' : '#3b4652');
+  set('pnlFltLamp', 'fill', s.filterLamp ? '#ffb020' : '#3b4652');
+  set('pnlTdLed', 'fill', B.en.td ? '#38e08a' : '#3b4652');
+  txt('pnlV1', B.en.v1 ? 'OPEN' : 'CLOSED', B.en.v1 ? '#38e08a' : '#e5483b');
+  txt('pnlV2', B.en.v2 ? 'OPEN' : 'CLOSED', B.en.v2 ? '#38e08a' : '#e5483b');
+  txt('pnlVfd', s.vfd, B.vfdFault ? '#ff8a80' : '#7fd7ff');
+  const ctl = B.mag('TB3') > 90 && !B.has('rwf_bad');
+  txt('pnlRwfPV', ctl ? (B.has('rwf_sensor') ? 'OPEN' : String(Math.round(B.rwfT()))) : '');
+  txt('pnlRwfSP', ctl ? String(RWF_SP) : '');
+  set('pnlRwfLed', 'fill', ctl && B.ocClosed() ? '#38e08a' : '#3b4652');
 }
 
 /* ---------- meter ---------- */
@@ -221,12 +236,13 @@ function installPart(k) {
   if (!p.live && B.disc) return strike('You started work on the boiler with the disconnect closed. 120 V was live in the cabinet and the burner could start.');
   partsUsed++;
   if (p.reset) {
-    const was = p.reset === 'hl' ? B.hlTrip : p.reset === 'lg' ? B.lgTrip : p.reset === 'ol' ? B.olTrip : B.hgTrip;
+    const was = p.reset === 'hl' ? B.hlTrip : p.reset === 'lg' ? B.lgTrip : p.reset === 'ol' ? B.olTrip : p.reset === 'vfd' ? !!B.vfdFault : B.hgTrip;
     if (!was) { wrongParts++; log(p.name + ': it was not tripped.', 's'); return; }
     if (p.reset === 'hl') { if (B.Tb > HL_SET - 15) { partsUsed--; log('The high limit will not reset yet. The water is still ' + Math.round(B.Tb) + '°F. Let it cool below ' + (HL_SET - 15) + '°F.', 'h'); return; } B.hlTrip = false; }
     if (p.reset === 'lg') { B.lgTrip = false; B.tick(0.01); if (B.lgTrip) { log('Low gas pressure switch reset. It popped right back out: the gas pressure at the switch is still too low.', 's'); return; } }
     if (p.reset === 'hg') B.hgTrip = false;
     if (p.reset === 'ol') { B.olTrip = false; B.humT = 0; }
+    if (p.reset === 'vfd') B.vfdFault = '';
     B.resetsSinceFix = 0; log(p.name.replace('Press', 'Pressed') + '. It latched in.', 'g'); updateStatus(); return;
   }
   const cured = [...B.faults].filter(f => FIXES[f] === k);
@@ -255,7 +271,7 @@ function startLevel(i) {
   sheet(`<div class="kick">Level ${l.n} · ${esc(l.rank)}</div><h3>${esc(l.title)}</h3><p style="color:var(--dim)">${esc(l.site)}</p><p>${esc(l.ticket)}</p>
     <p style="color:var(--dim);font-size:13px">Tools: multimeter (AC volts, ohms, DC volts for the flame signal), clamp meter, manometer, pump gauges, pipe thermometers and a combustion analyzer. Open the disconnect before any ohm reading or repair.</p>
     <div class="row"><button class="btn" id="custBtn0" type="button">Talk to the customer first</button><button class="btn go" id="goBtn" type="button">Start job</button></div>`);
-  $('goBtn').onclick = () => { closeSheet(); active = true; t0 = Date.now(); log('On site. The pump runs all the time, and the building controls are calling for heat.'); };
+  $('goBtn').onclick = () => { closeSheet(); active = true; t0 = Date.now(); log('On site at a Thermal Solutions EVA-3000. The system pump runs all the time, and the building is calling for heat.'); };
   $('custBtn0').onclick = () => { $('goBtn').onclick(); custSheet(); };
 }
 function endLevel(win, msg) {

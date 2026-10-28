@@ -1,38 +1,43 @@
-/* ===== Boiler control panel: every probe point the meter can touch, drawn with the same part artwork (ptdraw.js) as the
-   package unit game. Art goes behind; brass lugs sit under every terminal dot; wires (toggle) on top of the art. ===== */
-const PANEL_W = 1120, PANEL_H = 2110;
+/* ===== EVA-3000 control panel: every probe point the meter can touch, laid out like the boiler's control panel and drawn
+   with the same part artwork (ptdraw.js) as the package unit game. Art goes behind; brass lugs sit under every terminal
+   dot; wires (toggle) on top of the art. Terminal numbers follow Figure 9c of the EVA manual. ===== */
+const PANEL_W = 1120, PANEL_H = 2420;
 let TPOS = {};
-const NAV = [['Power', 0], ['Motor starters', 360], ['Limit string', 1075], ['Interlocks', 1285], ['Flame safeguard', 1495], ['Burner loads', 1875]];
+const NAV = [['Power', 0], ['Blower and switches', 360], ['Terminal strip', 700], ['Limit string', 840], ['RM7896D', 1240], ['Relays', 1600], ['Burner loads', 1800], ['System pump', 2010]];
 const TLBL = {
   LN_L1: 'L1', LN_L2: 'L2', LN_L3: 'L3', F1_IN: 'F1', F2_IN: 'F2', F3_IN: 'F3', F1_OUT: 'F1', F2_OUT: 'F2', F3_OUT: 'F3',
-  XF_H1: 'H1', XF_H2: 'H2', XF_X1: 'X1', XF_X2: 'X2', FU_IN: 'IN', FU_OUT: 'OUT', NB: 'N', GND: 'GND',
-  M1_L1: 'L1', M1_L2: 'L2', M1_L3: 'L3', M1_T1: 'T1', M1_T2: 'T2', M1_T3: 'T3', M1_A: 'A', M1_B: 'B',
-  BM_T1: 'T1', BM_T2: 'T2', BM_T3: 'T3', PS_L1: 'L1', PS_L2: 'L2', PS_L3: 'L3', PS_T1: 'T1', PS_T2: 'T2', PS_T3: 'T3', PS_A: 'A', PS_B: 'B',
-  OL_95: '95', OL_96: '96', PM_T1: 'T1', PM_T2: 'T2', PM_T3: 'T3', EN_1: '1', EN_2: '2', AL_1: '1', AL_2: '2', BS_1: '1', BS_2: '2',
-  OC_1: '1', OC_2: '2', HL_1: '1', HL_2: '2', LW_1: '1', LW_2: '2', FS_1: '1', FS_2: '2',
-  LG_1: 'C', LG_2: 'NO', HG_1: 'C', HG_2: 'NC', AP_1: 'C', AP_2: 'NO',
-  RM_L1: 'L1', RM_L2: 'L2', RM_3: '3', RM_4: '4', RM_6: '6', RM_7: '7', RM_8: '8', RM_9: '9', RM_10: '10', FT_P: '+', FT_N: '−',
-  PV_1: '1', PV_2: '2', V1_1: '1', V1_2: '2', V2_1: '1', V2_2: '2', IG_1: '1', IG_2: '2'
+  VFD_L1: 'L1', VFD_L2: 'L2/N', VFD_L3: 'L3', VFD_U: 'U', VFD_V: 'V', VFD_W: 'W', BM_U: 'U', BM_V: 'V', BM_W: 'W',
+  FUA_IN: 'IN', FUA_OUT: 'OUT', FUB_IN: 'IN', FUB_OUT: 'OUT', XF_H1: 'H1', XF_H2: 'H2', XF_X1: 'X1', XF_X2: 'X2',
+  CB_1: 'LINE', CB_2: 'LOAD', BS_1: '1', BS_2: '2', FL_C: 'C', FL_NO: 'NO', EN_1: 'TB4', EN_2: 'TB5', GND: 'GND',
+  HL_1: 'C', HL_2: 'NC', OC_1: 'Q13', OC_2: 'Q14', LG_1: 'C', LG_2: 'NO', HG_1: 'C', HG_2: 'NC', FS_1: 'NO', FS_2: 'C',
+  LW_1: '1', LW_2: '2', VF_1: '1', VF_2: '2', AP_1: 'C', AP_2: 'NO',
+  RM_L2: 'L2', RM_3: '3', RM_4: '4', RM_5: '5', RM_6: '6', RM_7: '7', RM_8: '8', RM_9: '9', RM_10: '10', FT_P: '+', FT_N: '−',
+  CR1_A: '14', CR1_B: '13', CR2_A: '14', CR2_B: '13', TD_1: 'IN', TD_2: 'COM', AL_1: '1', AL_2: '2',
+  IG_1: '1', IG_2: '2', PV_1: '1', PV_2: '2', V1_1: 'L', V1_2: 'N', V2_1: '1', V2_2: '2', VV_1: '1', VV_2: '2',
+  OL_95: '95', OL_96: '96', PS_A: 'A', PS_B: 'B', PS_L1: 'L1', PS_L2: 'L2', PS_L3: 'L3', PS_T1: 'T1', PS_T2: 'T2', PS_T3: 'T3', PM_T1: 'T1', PM_T2: 'T2', PM_T3: 'T3'
 };
-/* terminal positions [id, x, y, label side: 'a' above (default below)] */
+for (let n = 1; n <= 12; n++) TLBL['TB' + n] = String(n);
+/* terminal positions [id, x, y, label: 'a' above, 'ad' above dark (on a light plate), 'r' right; default below] */
 const TERMS = [
   ['LN_L1', 120, 122, 'r'], ['LN_L2', 240, 122, 'r'], ['LN_L3', 360, 122, 'r'], ['F1_IN', 120, 196, 'r'], ['F2_IN', 240, 196, 'r'], ['F3_IN', 360, 196, 'r'],
   ['F1_OUT', 120, 304], ['F2_OUT', 240, 304], ['F3_OUT', 360, 304],
-  ['XF_H1', 570, 140, 'a'], ['XF_H2', 570, 270], ['XF_X1', 690, 140, 'a'], ['XF_X2', 690, 270],
-  ['FU_IN', 840, 190], ['FU_OUT', 890, 190], ['NB', 1030, 130], ['GND', 1030, 270],
-  ['M1_L1', 120, 475], ['M1_L2', 240, 475], ['M1_L3', 360, 475], ['M1_T1', 120, 605], ['M1_T2', 240, 605], ['M1_T3', 360, 605], ['M1_A', 420, 475], ['M1_B', 420, 605],
-  ['BM_T1', 560, 640], ['BM_T2', 630, 640], ['BM_T3', 700, 640],
-  ['EN_1', 870, 610], ['EN_2', 1030, 610],
-  ['PS_L1', 120, 795], ['PS_L2', 240, 795], ['PS_L3', 360, 795], ['PS_T1', 120, 925], ['PS_T2', 240, 925], ['PS_T3', 360, 925], ['PS_A', 420, 795], ['PS_B', 420, 925],
-  ['OL_95', 320, 1000], ['OL_96', 410, 1000],
-  ['PM_T1', 560, 985], ['PM_T2', 630, 985], ['PM_T3', 700, 985],
-  ['AL_1', 870, 830], ['AL_2', 1030, 830], ['BS_1', 870, 1020], ['BS_2', 1030, 1020],
-  ['OC_1', 85, 1220], ['OC_2', 245, 1220], ['HL_1', 350, 1220], ['HL_2', 510, 1220], ['LW_1', 615, 1220], ['LW_2', 775, 1220], ['FS_1', 880, 1220], ['FS_2', 1040, 1220],
-  ['LG_1', 100, 1430], ['LG_2', 300, 1430], ['HG_1', 460, 1430], ['HG_2', 660, 1430], ['AP_1', 820, 1430], ['AP_2', 1020, 1430],
-  ['FT_P', 960, 1640], ['FT_N', 1040, 1640],
-  ['RM_L1', 120, 1790, 'ad'], ['RM_L2', 225, 1790, 'ad'], ['RM_3', 330, 1790, 'ad'], ['RM_4', 435, 1790, 'ad'], ['RM_6', 540, 1790, 'ad'], ['RM_7', 645, 1790, 'ad'], ['RM_8', 750, 1790, 'ad'], ['RM_9', 855, 1790, 'ad'], ['RM_10', 960, 1790, 'ad'],
-  ['IG_1', 85, 2030], ['IG_2', 245, 2030], ['PV_1', 350, 2030], ['PV_2', 510, 2030], ['V1_1', 615, 2030], ['V1_2', 775, 2030], ['V2_1', 880, 2030], ['V2_2', 1040, 2030]
+  ['VFD_L1', 510, 300], ['VFD_L2', 555, 300], ['VFD_L3', 600, 300], ['VFD_U', 660, 300], ['VFD_V', 705, 300], ['VFD_W', 750, 300],
+  ['FUA_IN', 830, 140], ['FUA_OUT', 880, 140], ['FUB_IN', 960, 140], ['FUB_OUT', 1010, 140],
+  ['XF_H1', 890, 230, 'a'], ['XF_H2', 890, 310], ['XF_X1', 1010, 230, 'a'], ['XF_X2', 1010, 310],
+  ['BM_U', 120, 630], ['BM_V', 190, 630], ['BM_W', 260, 630],
+  ['CB_1', 400, 480], ['CB_2', 490, 480], ['BS_1', 590, 480], ['BS_2', 680, 480], ['FL_C', 410, 640], ['FL_NO', 520, 640],
+  ['GND', 1040, 470], ['EN_1', 800, 640], ['EN_2', 1040, 640],
+  ['OL_95', 320, 2340], ['OL_96', 410, 2340], ['PS_A', 420, 2135], ['PS_B', 420, 2265],
+  ['PS_L1', 120, 2135], ['PS_L2', 240, 2135], ['PS_L3', 360, 2135], ['PS_T1', 120, 2265], ['PS_T2', 240, 2265], ['PS_T3', 360, 2265],
+  ['PM_T1', 560, 2330], ['PM_T2', 630, 2330], ['PM_T3', 700, 2330],
+  ['HL_1', 85, 1000], ['HL_2', 245, 1000], ['OC_1', 350, 1000], ['OC_2', 510, 1000], ['LG_1', 615, 1000], ['LG_2', 775, 1000], ['HG_1', 880, 1000], ['HG_2', 1040, 1000],
+  ['FS_1', 85, 1190], ['FS_2', 245, 1190], ['LW_1', 350, 1190], ['LW_2', 510, 1190], ['VF_1', 615, 1190], ['VF_2', 775, 1190], ['AP_1', 880, 1190], ['AP_2', 1040, 1190],
+  ['FT_P', 960, 1390], ['FT_N', 1040, 1390],
+  ['RM_L2', 120, 1540, 'ad'], ['RM_3', 225, 1540, 'ad'], ['RM_4', 330, 1540, 'ad'], ['RM_5', 435, 1540, 'ad'], ['RM_6', 540, 1540, 'ad'], ['RM_7', 645, 1540, 'ad'], ['RM_8', 750, 1540, 'ad'], ['RM_9', 855, 1540, 'ad'], ['RM_10', 960, 1540, 'ad'],
+  ['CR1_A', 248, 1692, 'r'], ['CR1_B', 248, 1762, 'r'], ['CR2_A', 513, 1692, 'r'], ['CR2_B', 513, 1762, 'r'], ['TD_1', 620, 1760], ['TD_2', 780, 1760], ['AL_1', 880, 1760], ['AL_2', 1040, 1760],
+  ['IG_1', 75, 1965], ['IG_2', 205, 1965], ['PV_1', 287, 1965], ['PV_2', 417, 1965], ['V1_1', 499, 1965], ['V1_2', 629, 1965], ['V2_1', 711, 1965], ['V2_2', 841, 1965], ['VV_1', 923, 1965], ['VV_2', 1053, 1965]
 ];
+for (let n = 1; n <= 12; n++) TERMS.push(['TB' + n, 85 + (n - 1) * 88, 790, 'ad']);
 TERMS.forEach(t => { TPOS[t[0]] = [t[1], t[2]]; });
 
 function pbox(x, y, w, h, t, s) {
@@ -40,7 +45,6 @@ function pbox(x, y, w, h, t, s) {
 }
 function psect(y, label) { return `<text x="24" y="${y}" style="font:700 13px var(--head);letter-spacing:.16em;fill:var(--yellow);text-transform:uppercase">${label}</text>`; }
 
-/* boiler parts not in the package unit set, drawn in the same style */
 const BX = {
   /* cartridge fuse in a black holder between an in and an out lug */
   cartridge(x, y1, y2, amps) {
@@ -113,53 +117,98 @@ const BX = {
       `<rect x="${cx - 34}" y="${cy - 18}" width="68" height="26" rx="3" fill="#f1f3f5"/><text x="${cx}" y="${cy - 1}" text-anchor="middle" style="font:700 9px sans-serif;fill:#20262c">6000 V</text>`;
   }
 };
+Object.assign(BX, {
+  /* variable frequency drive: grey body, keypad with a live display, heat-sink fins */
+  vfd(x, y, w, h) {
+    let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="#5f6b77" stroke="#2c343c" stroke-width="2"/>`;
+    for (let xx = x + 12; xx < x + w - 8; xx += 12) s += `<line x1="${xx}" y1="${y + h - 46}" x2="${xx}" y2="${y + h - 10}" stroke="#3d4650" stroke-width="3"/>`;
+    s += `<rect x="${x + 20}" y="${y + 16}" width="${w - 40}" height="54" rx="5" fill="#0d1822" stroke="#25343f" stroke-width="2"/><text id="pnlVfd" x="${x + w / 2}" y="${y + 50}" text-anchor="middle" style="font:700 15px var(--mono);fill:#7fd7ff"></text>`;
+    ['STOP', 'RUN', 'FWD'].forEach((t, i) => { s += `<rect x="${x + 30 + i * 74}" y="${y + 84}" width="60" height="26" rx="5" fill="${i ? '#2f3943' : '#b3302a'}" stroke="#1d242b"/><text x="${x + 60 + i * 74}" y="${y + 101}" text-anchor="middle" style="font:700 10px sans-serif;fill:#fff">${t}</text>`; });
+    return s;
+  },
+  /* RWF55 temperature controller: red actual value, green setpoint, burner-on LED */
+  rwf(x, y, w) {
+    return `<rect x="${x}" y="${y}" width="${w}" height="76" rx="6" fill="#20262c" stroke="#0b0e11" stroke-width="2"/><rect x="${x + 10}" y="${y + 8}" width="${w - 20}" height="34" rx="3" fill="#0b0f12"/>` +
+      `<text id="pnlRwfPV" x="${x + w - 18}" y="${y + 34}" text-anchor="end" style="font:700 22px var(--mono);fill:#ff4a3d">---</text><text x="${x + 16}" y="${y + 34}" style="font:700 10px sans-serif;fill:#8fa1b3">RWF55</text>` +
+      `<text id="pnlRwfSP" x="${x + w - 18}" y="${y + 64}" text-anchor="end" style="font:700 15px var(--mono);fill:#38e08a">180</text><circle id="pnlRwfLed" cx="${x + 20}" cy="${y + 58}" r="5" fill="#3b4652"/><text x="${x + 30}" y="${y + 62}" style="font:700 8px sans-serif;fill:#8fa1b3">BURNER</text>`;
+  },
+  /* small panel lamp */
+  lamp(cx, cy, id, col, label) {
+    return `<circle id="${id}" data-on="${col}" cx="${cx}" cy="${cy}" r="13" fill="#3b4652" stroke="#1d242b" stroke-width="3"/><text x="${cx}" y="${cy + 30}" text-anchor="middle" style="font:700 9px sans-serif;fill:#c8d2dc">${label}</text>`;
+  },
+  /* 5 A control circuit breaker */
+  breaker(cx, cy) {
+    return `<rect x="${cx - 26}" y="${cy - 30}" width="52" height="60" rx="5" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/><rect x="${cx - 9}" y="${cy - 22}" width="18" height="26" rx="3" fill="#d9dde1" stroke="#7b848c"/><text x="${cx}" y="${cy + 22}" text-anchor="middle" style="font:700 10px sans-serif;fill:#e9edf1">5 A</text>`;
+  },
+  /* time delay module */
+  timer(x, y, w) {
+    return `<rect x="${x}" y="${y}" width="${w}" height="56" rx="6" fill="#e7ebee" stroke="#7d8892" stroke-width="2"/><circle cx="${x + 30}" cy="${y + 28}" r="14" fill="#f4f6f8" stroke="#6b7480" stroke-width="2"/><line x1="${x + 30}" y1="${y + 28}" x2="${x + 38}" y2="${y + 18}" stroke="#b3302a" stroke-width="2.5"/>` +
+      `<text x="${x + 56}" y="${y + 24}" style="font:700 11px sans-serif;fill:#20262c">TD-1</text><text x="${x + 56}" y="${y + 42}" style="font:700 10px sans-serif;fill:#3a434c">20 SEC</text><circle id="pnlTdLed" cx="${x + w - 18}" cy="${y + 28}" r="5" fill="#3b4652"/>`;
+  }
+});
 
 function buildPanel() {
   let g = PT.defs + `<rect x="0" y="0" width="${PANEL_W}" height="${PANEL_H}" rx="10" fill="#1a222b"/>`;
   /* ---- power ---- */
-  g += pbox(40, 30, 420, 310, 'Fused disconnect', '208 V 3 phase · 15 A fuses') + BX.blades([120, 240, 360], 122, 196);
+  g += pbox(40, 30, 420, 320, 'Fused disconnect', 'by others · 208 V 3 phase') + BX.blades([120, 240, 360], 122, 196);
   [120, 240, 360].forEach(x => { g += BX.cartridge(x, 198, 302, '15 A'); });
   g += `<text class="sub" x="438" y="126" text-anchor="end" style="font-size:11px">LINE</text><text class="sub" x="438" y="200" text-anchor="end" style="font-size:11px">LOAD</text>`;
-  g += pbox(480, 30, 300, 310, 'Control transformer', '208 V in · 120 V out') + PT.xfmr(492, 100, 276, 210, 570, 690, 140, 270, '208 V', '120 V');
-  g += pbox(800, 30, 140, 240, 'Fuse FU4', '120 V, 3 A') + PT.fuse(840, 890, 190);
-  g += pbox(960, 30, 140, 310, 'Neutral', 'X2 bar · ground') + PT.tbar(990, 1070, 130) + PT.ground(1030, 270);
-  /* ---- motor starters ---- */
-  g += psect(370, 'Motor starters');
-  g += pbox(40, 380, 420, 300, 'Blower contactor M1', '') + PT.contactor(50, 432, 410, 216, [120, 240, 360], 475, 605, [420, 475, 605], 'm1');
-  g += pbox(480, 380, 300, 300, 'Burner blower', '3/4 hp, 208 V, 3 phase') + PT.wheel(630, 520, 64, 'blw') + PT.tbar(520, 740, 640);
-  g += pbox(800, 380, 300, 300, 'Heating call', 'Contact from building controls') + PT.module(820, 450, 260, 90, '#e7ebee') + PT.pswitch(870, 1030, 610, 'call');
-  g += pbox(40, 700, 420, 360, 'Pump starter', '') + PT.contactor(50, 752, 410, 216, [120, 240, 360], 795, 925, [420, 795, 925], 'ps') + BX.overload(60, 968, 390);
-  g += pbox(480, 700, 300, 360, 'Circulating pump', '1 hp, 208 V, 3 phase') + PT.motor(520, 790, 200, 110) + PT.tbar(520, 740, 985);
-  g += pbox(800, 700, 300, 170, 'Alarm light', 'Panel door, 120 V') + `<circle id="pnlAlarm" cx="950" cy="788" r="24" fill="#3a1d1a" stroke="#7a3a33" stroke-width="4"/>`;
-  g += pbox(800, 890, 300, 170, 'Burner switch', '') + BX.toggle(950, 972);
+  g += pbox(480, 30, 300, 330, 'VFD', 'A/C Tech SCF · L1-L3 in, U V W out') + BX.vfd(495, 90, 270, 175) + PT.tbar(486, 774, 300);
+  g += pbox(800, 30, 300, 330, 'Control transformer', '') + PT.fuse(830, 880, 140) + PT.fuse(960, 1010, 140) + PT.xfmr(812, 200, 276, 140, 890, 1010, 230, 310, '208 V', '115 V');
+  /* ---- blower and switches ---- */
+  g += psect(370, 'Blower, control power and switches');
+  g += pbox(40, 380, 300, 300, 'Combustion blower', '2 hp, 3 phase (from VFD)') + PT.wheel(190, 520, 60, 'blw') + PT.tbar(80, 300, 630);
+  g += pbox(360, 380, 170, 140, 'Circuit breaker', '') + BX.breaker(445, 452);
+  g += pbox(550, 380, 170, 140, 'Burner switch', '') + BX.lamp(635, 440, 'pnlBsLamp', '#f5c400', 'ON');
+  g += pbox(360, 540, 360, 140, 'Blocked air filter switch', '') + BX.lamp(640, 600, 'pnlFltLamp', '#ffb020', 'CHANGE FILTER');
+  g += pbox(740, 380, 360, 140, 'Ground', 'X2 is grounded at TB2') + PT.ground(1040, 470);
+  g += pbox(740, 540, 360, 140, 'Field enable / heat call', 'TB4 to TB5 (factory jumper removed)') + PT.pswitch(800, 1040, 640, 'call');
+  /* ---- terminal strip ---- */
+  g += psect(710, 'Terminal strip (Figure 9c)');
+  g += `<rect x="40" y="720" width="1060" height="110" rx="8" fill="url(#ptBeige)" stroke="#8d8672" stroke-width="2"/>`;
+  [['1', 'X1'], ['2', 'N'], ['3', 'CB'], ['4', 'SW'], ['5', 'LIM'], ['6', 'RM6'], ['7', 'RM7'], ['8', 'PILOT'], ['9', 'MAIN'], ['10', 'IGN'], ['11', 'CRA1'], ['12', 'CRA2']].forEach((t, i) => {
+    g += `<text x="${85 + i * 88}" y="826" text-anchor="middle" style="font:700 9px sans-serif;fill:#3a434c">${t[1]}</text>`;
+  });
   /* ---- limit string ---- */
-  g += psect(1080, 'Limit string · burner switch → operating → high limit → low water → flow → RM 6');
-  g += pbox(40, 1090, 250, 170, 'Operating aquastat', '') + BX.aquastat(60, 1140, 210, '180°F');
-  g += pbox(305, 1090, 250, 170, 'High limit (MR)', '') + BX.aquastat(325, 1140, 210, '210°F', true);
-  g += pbox(570, 1090, 250, 170, 'Low-water cutoff', '') + BX.lwco(590, 1140, 210);
-  g += pbox(835, 1090, 250, 170, 'Flow switch', '') + BX.flowsw(855, 1132, 210);
-  /* ---- interlocks ---- */
-  g += psect(1290, 'Lockout interlocks · RM 6 → low gas → high gas → air switch → RM 7');
-  g += pbox(40, 1300, 340, 170, 'Low gas pressure', '') + BX.dswitch(200, 1378, 'url(#ptBlue)', 'LOW GAS', '3.5 in. MR');
-  g += pbox(400, 1300, 340, 170, 'High gas pressure', '') + BX.dswitch(560, 1378, '#b3302a', 'HIGH GAS', '5.0 in. MR');
-  g += pbox(760, 1300, 340, 170, 'Air proving switch', '') + BX.dswitch(920, 1378, '#6d7c8b', 'AIR', '0.5 in.');
+  g += psect(850, 'Limit string · TB5 → high limit → RWF55 → low gas → high gas → flow → low water → vestibule fuse → TB6');
+  g += pbox(40, 860, 250, 170, 'High limit L4008E', '') + BX.aquastat(60, 905, 210, '210°F', true);
+  g += pbox(305, 860, 250, 170, 'Operating (RWF55)', '') + BX.rwf(320, 900, 220);
+  g += pbox(570, 860, 250, 170, 'Low gas pressure', '') + BX.dswitch(695, 935, 'url(#ptBlue)', 'LOW GAS', 'MR');
+  g += pbox(835, 860, 250, 170, 'High gas pressure', '') + BX.dswitch(960, 935, '#b3302a', 'HIGH GAS', 'MR');
+  g += pbox(40, 1050, 250, 170, 'Flow switch FS4-3', '') + BX.flowsw(60, 1092, 210);
+  g += pbox(305, 1050, 250, 170, 'Low-water cutoff', '') + BX.lwco(325, 1092, 210);
+  g += pbox(570, 1050, 250, 170, 'Vestibule fuse switch', '') + `<rect x="645" y="1100" width="100" height="44" rx="6" fill="url(#ptBlack)" stroke="#0b0e11"/><rect x="665" y="1114" width="60" height="16" rx="3" fill="url(#ptBrass)" stroke="#5c3f10"/>`;
+  g += pbox(835, 1050, 250, 170, 'Combustion airflow sw.', '') + BX.dswitch(960, 1130, '#6d7c8b', 'AIR', '');
   /* ---- relay module ---- */
-  g += psect(1500, 'Flame safeguard relay module (7800 series, on/off)');
-  g += pbox(40, 1510, 1060, 340, 'Relay module on its subbase', 'Keyboard display, plug-in flame amplifier, UV scanner on F and G');
-  g += `<rect x="70" y="1570" width="820" height="160" rx="10" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/><rect x="80" y="1580" width="800" height="14" rx="4" fill="#2d343b"/>`;
-  g += `<rect x="110" y="1610" width="330" height="96" rx="8" fill="#0d1822" stroke="#25343f" stroke-width="3"/><text id="pnlKdm" x="275" y="1650" text-anchor="middle" style="font:700 20px var(--mono);fill:#7fd7ff">---</text><text id="pnlKdm2" x="275" y="1680" text-anchor="middle" style="font:13px var(--mono);fill:#7fd7ff"></text>`;
-  ['POWER', 'PILOT', 'FLAME', 'MAIN', 'ALARM'].forEach((t, i) => { g += `<circle class="pled" data-led="${t}" cx="${490 + i * 76}" cy="1640" r="8" fill="#3b4652"/><text x="${490 + i * 76}" y="1668" text-anchor="middle" style="font:700 10px sans-serif;fill:#c8d2dc">${t}</text>`; });
-  g += `<rect x="910" y="1570" width="170" height="110" rx="8" fill="#17543a" stroke="#0a2a1c" stroke-width="2"/><text x="995" y="1596" text-anchor="middle" style="font:700 10px sans-serif;fill:#e9efe9">FLAME AMPLIFIER</text><text x="995" y="1610" text-anchor="middle" style="font:700 9px sans-serif;fill:#bfe6cf">TEST JACKS V dc</text>`;
-  g += `<rect x="70" y="1748" width="1000" height="80" rx="8" fill="url(#ptBeige)" stroke="#8d8672" stroke-width="2"/><text x="1056" y="1820" text-anchor="end" style="font:700 10px sans-serif;fill:#3a434c">SUBBASE</text>`;
+  g += psect(1250, 'Flame safeguard RM7896D (30 s purge card ST7800A)');
+  g += pbox(40, 1260, 1060, 330, '', '');
+  g += `<rect x="70" y="1280" width="820" height="170" rx="10" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/><rect x="80" y="1290" width="800" height="14" rx="4" fill="#2d343b"/>`;
+  g += `<text x="96" y="1326" style="font:700 12px sans-serif;fill:#c8d2dc">HONEYWELL RM7896D</text>`;
+  g += `<rect x="110" y="1340" width="330" height="96" rx="8" fill="#0d1822" stroke="#25343f" stroke-width="3"/><text id="pnlKdm" x="275" y="1380" text-anchor="middle" style="font:700 20px var(--mono);fill:#7fd7ff">---</text><text id="pnlKdm2" x="275" y="1410" text-anchor="middle" style="font:13px var(--mono);fill:#7fd7ff"></text>`;
+  ['POWER', 'PILOT', 'FLAME', 'MAIN', 'ALARM'].forEach((t, i) => { g += `<circle class="pled" data-led="${t}" cx="${490 + i * 76}" cy="1370" r="8" fill="#3b4652"/><text x="${490 + i * 76}" y="1398" text-anchor="middle" style="font:700 10px sans-serif;fill:#c8d2dc">${t}</text>`; });
+  g += `<rect x="910" y="1300" width="170" height="130" rx="8" fill="#17543a" stroke="#0a2a1c" stroke-width="2"/><text x="995" y="1326" text-anchor="middle" style="font:700 10px sans-serif;fill:#e9efe9">R7849A UV AMPLIFIER</text><text x="995" y="1342" text-anchor="middle" style="font:700 9px sans-serif;fill:#bfe6cf">TEST JACKS V dc</text>`;
+  g += `<rect x="70" y="1498" width="1000" height="80" rx="8" fill="url(#ptBeige)" stroke="#8d8672" stroke-width="2"/><text x="1056" y="1570" text-anchor="end" style="font:700 10px sans-serif;fill:#3a434c">SUBBASE · F to UV scanner</text>`;
+  /* ---- relays ---- */
+  g += psect(1610, 'Relays and timer');
+  g += pbox(40, 1620, 255, 170, 'CRA1 enable blower', '') + PT.relay(48, 1662, 240, 118, 'cra1');
+  g += pbox(305, 1620, 255, 170, 'CRA2 release to mod', '') + PT.relay(313, 1662, 240, 118, 'cra2');
+  g += pbox(570, 1620, 255, 170, 'Time delay TD-1', 'from TB9 → TB12') + BX.timer(600, 1676, 200);
+  g += pbox(835, 1620, 255, 170, 'Alarm light', 'from RM 3') + `<circle id="pnlAlarm" cx="960" cy="1700" r="24" fill="#3a1d1a" stroke="#7a3a33" stroke-width="4"/>`;
   /* ---- loads ---- */
-  g += psect(1880, 'Burner loads (120 V)');
-  g += pbox(40, 1890, 250, 190, 'Ignition xfmr', '') + BX.ignx(165, 1985);
-  g += pbox(305, 1890, 250, 190, 'Pilot valve', '') + BX.solenoid(430, 1975);
-  g += pbox(570, 1890, 250, 190, 'Main valve V1', '') + BX.actuator(695, 1975, 'pnlV1');
-  g += pbox(835, 1890, 250, 190, 'Main valve V2', '') + BX.actuator(960, 1975, 'pnlV2');
+  g += psect(1810, 'Burner loads (115 V)');
+  g += pbox(40, 1820, 200, 190, 'Ignition xfmr', '') + BX.ignx(140, 1915);
+  g += pbox(252, 1820, 200, 190, 'Pilot V4046', '') + BX.solenoid(352, 1895);
+  g += pbox(464, 1820, 200, 190, 'SKP75 actuator', '') + BX.actuator(564, 1900, 'pnlV1');
+  g += pbox(676, 1820, 200, 190, 'Secondary valve', '') + BX.solenoid(776, 1895).replace('120 V', '115 V') + `<text id="pnlV2" x="776" y="1935" text-anchor="middle" style="font:800 10px sans-serif;fill:#e5483b">CLOSED</text>`;
+  g += pbox(888, 1820, 200, 190, 'Vent valve (N.O.)', '') + BX.solenoid(988, 1895).replace('120 V', 'VENT');
+  /* ---- system pump (by others) ---- */
+  g += psect(2020, 'System pump (by others) · fed from TB3, runs whenever the boiler has power');
+  g += pbox(40, 2030, 420, 360, 'System pump starter', '') + PT.contactor(50, 2092, 410, 216, [120, 240, 360], 2135, 2265, [420, 2135, 2265], 'ps') + BX.overload(60, 2308, 390);
+  g += pbox(480, 2030, 300, 360, 'System pump motor', '5 hp, 208 V, 3 phase') + PT.motor(520, 2130, 200, 110) + PT.tbar(520, 740, 2330);
+  g += pbox(800, 2030, 300, 360, 'Field wiring', '') + `<text class="sub" x="816" y="2100">The pump keeps water moving</text><text class="sub" x="816" y="2122">through the building at all times.</text><text class="sub" x="816" y="2160">Starter coil: TB3 → OL 95-96 → A,</text><text class="sub" x="816" y="2182">B → TB2 (neutral).</text>`;
   /* brass lugs under every terminal, wires, then the terminal dots */
   g += PT.lugs(TERMS.filter(t => !/^FT_/.test(t[0])).map(t => [t[1], t[2]]));
-  g += `<circle cx="960" cy="1640" r="12" fill="#c33" stroke="#6e1712" stroke-width="2"/><circle cx="1040" cy="1640" r="12" fill="#222" stroke="#000" stroke-width="2"/>`;
+  g += `<circle cx="960" cy="1390" r="12" fill="#c33" stroke="#6e1712" stroke-width="2"/><circle cx="1040" cy="1390" r="12" fill="#222" stroke="#000" stroke-width="2"/>`;
   g += buildWires();
   TERMS.forEach(t => {
     const id = t[0], x = t[1], y = t[2], side = t[3] === 'r', up = t[3] === 'a' || t[3] === 'ad', ly = side ? y + 5 : up ? y - 20 : y + 34, lx = side ? x + 24 : x;
@@ -169,22 +218,22 @@ function buildPanel() {
   });
   return g;
 }
-/* field wiring, drawn when "Wires: On". Leg colours as in the package unit game; red 120 V hot, blue neutral */
+/* field wiring, drawn when "Wires: On". Leg colours as in the package unit game; red 115 V hot, blue neutral */
 function buildWires() {
   const LEG = { 1: '#e8a33b', 2: '#b48cff', 3: '#4ac9c0' };
   let s = '';
   NETS.forEach((n, i) => {
     const pts = n.filter(id => TPOS[id]);
     if (pts.length < 2) return;
-    const neutral = n.indexOf('NB') >= 0;
-    const lm = n.join(' ').match(/\b(?:F|M1_T|PS_T)([123])/);
-    const col = neutral ? '#4aa3df' : lm ? LEG[lm[1]] : '#e5483b';
-    const root = neutral ? 'NB' : pts[0];
+    const neutral = n.indexOf('TB2') >= 0;
+    const lm = n.join(' ').match(/\bF([123])_OUT|\bPS_T([123])|\bVFD_([UVW])/);
+    const col = neutral ? '#4aa3df' : lm ? LEG[lm[1] || lm[2] || ({ U: 1, V: 2, W: 3 })[lm[3]]] : '#e5483b';
+    const root = neutral ? 'TB2' : pts[0];
     for (let k = neutral ? 0 : 1; k < pts.length; k++) {
       const a = TPOS[neutral ? root : pts[k - 1]], b = TPOS[pts[k]];
       if (a === b) continue;
       const lane = 22 + (i % 6) * 5;
-      const d = Math.abs(a[1] - b[1]) < 4 ? `M${a[0]} ${a[1]} V${a[1] + lane} H${b[0]} V${b[1]}` : `M${a[0]} ${a[1]} V${Math.max(a[1], b[1]) + lane} H${b[0]} V${b[1]}`;
+      const d = `M${a[0]} ${a[1]} V${Math.max(a[1], b[1]) + lane} H${b[0]} V${b[1]}`;
       s += `<path class="wr" d="${d}" stroke="${col}" stroke-width="3.5" fill="none" stroke-linejoin="round" stroke-linecap="round" opacity=".85"/>`;
     }
   });

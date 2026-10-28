@@ -1,66 +1,86 @@
 /* ---- engine.js ---- */
-/* ===== Hot-water boiler simulation: 208 V 3-phase power (blower and pump motors), 120 V control circuit from a control
-   transformer, 7800-series flame safeguard (on/off burner), water side (pump, flow, pressure, expansion tank, relief valve)
-   and combustion (gas pressures, air, flue gas).
+/* ===== Simulation of a Thermal Solutions EVA-3000 hot-water boiler (EVA3000BN1-UEBM), modelled on the EVA I&O manual
+   (81456001 R12-6/16), Figure 9c "Standard UL/FM/CSD-1 Wiring Diagram (Modulation) EVA 2000S-3000":
+   - 208 V 3-phase supply to a variable frequency drive (A/C Tech SCF) that runs the 2 hp combustion blower, and through
+     two primary fuses to a control transformer (115 V secondary, X2 grounded) -> 5 A control circuit breaker.
+   - Terminal strip TB1-TB13 exactly as the diagram numbers it; Honeywell RM7896D flame safeguard on its subbase
+     (5 = power, 4 = blower, 6 = limits in, 7 = lockout interlock in, 8 = pilot, 9 = main valves, 10 = ignition, 3 = alarm).
+   - Limit string TB5 -> high limit (L4008E, manual reset) -> operating switch (RWF55 Q13-Q14) -> low gas -> high gas ->
+     flow switch (FS4-3) -> low-water cutoff -> vestibule fuse switch -> TB6. Combustion airflow switch TB6 -> TB7.
+   - Modulation: RWF55 holds low fire until CRA2 "release to mod" (TD-1, 20 s after the main valves open), then
+     sets blower speed (VFD) to the load; the SKP75 ratio valve follows the air.
    Written in plain ES2017 on purpose: the classroom smartboard browser is old. ===== */
 
-const SPEED = 2;            /* flame safeguard timers run at twice real time so a full start takes about 40 s, not 80 s */
-const FLAME_MIN = 1.25;     /* flame signal (V dc at the test jacks) needed to prove flame */
-const OC_SET = 180, OC_DIFF = 15, HL_SET = 210;   /* operating aquastat opens at 180 and closes at 165; manual reset high limit 210 */
-const XF_RATIO = 120 / 208; /* control transformer 208 V primary, 120 V secondary */
+const SPEED = 2;            /* flame safeguard timers run at twice real time */
+const FLAME_MIN = 1.25;     /* RM7896 proves flame at 1.25 V dc; the manual's normal range is 1.5 - 5.0 V dc */
+const RWF_SP = 180, RWF_ON = 175, RWF_OFF = 185, HL_SET = 210;   /* RWF55 setpoint (factory 180°F), burner on/off points; L4008E high limit */
+const XF_RATIO = 115 / 208; /* control transformer, 208 V tap to 115 V */
+const FS_MAKE = 110;        /* gpm at which the flow switch paddle closes (EVA-3000 minimum flow 131 gpm) */
+const RELIEF = 50;          /* relief valve setting (set at time of purchase; 50 psi assumed) */
 
-/* every probe point on the panel, in the words a tech would use */
+/* every probe point, in the words a tech would use */
 const NODES = {
-  LN_L1: 'Disconnect, line side L1 (always live)', LN_L2: 'Disconnect, line side L2 (always live)', LN_L3: 'Disconnect, line side L3 (always live)',
+  LN_L1: 'Fused disconnect, line side L1 (always live)', LN_L2: 'Fused disconnect, line side L2 (always live)', LN_L3: 'Fused disconnect, line side L3 (always live)',
   F1_IN: 'Disconnect fuse F1, in', F2_IN: 'Disconnect fuse F2, in', F3_IN: 'Disconnect fuse F3, in',
-  F1_OUT: 'Disconnect fuse F1, out', F2_OUT: 'Disconnect fuse F2, out', F3_OUT: 'Disconnect fuse F3, out',
-  XF_H1: 'Control transformer H1 (208 V primary)', XF_H2: 'Control transformer H2 (208 V primary)',
-  XF_X1: 'Control transformer X1 (120 V secondary)', XF_X2: 'Control transformer X2 (secondary, grounded)',
-  FU_IN: 'Control fuse FU4, in', FU_OUT: 'Control fuse FU4, out (120 V bus)',
-  NB: 'Neutral bar (X2)', GND: 'Ground lug (bare metal)',
-  M1_L1: 'Blower contactor M1 L1 (line)', M1_L2: 'Blower contactor M1 L2 (line)', M1_L3: 'Blower contactor M1 L3 (line)',
-  M1_T1: 'Blower contactor M1 T1 (load)', M1_T2: 'Blower contactor M1 T2 (load)', M1_T3: 'Blower contactor M1 T3 (load)',
-  M1_A: 'Blower contactor M1 coil A (from RM 3)', M1_B: 'Blower contactor M1 coil B (neutral)',
-  BM_T1: 'Blower motor T1', BM_T2: 'Blower motor T2', BM_T3: 'Blower motor T3',
-  PS_L1: 'Pump starter L1 (line)', PS_L2: 'Pump starter L2 (line)', PS_L3: 'Pump starter L3 (line)',
-  PS_T1: 'Pump starter T1 (to motor)', PS_T2: 'Pump starter T2 (to motor)', PS_T3: 'Pump starter T3 (to motor)',
-  PS_A: 'Pump starter coil A', PS_B: 'Pump starter coil B (neutral)',
-  OL_95: 'Pump overload contact 95 (NC, in from the 120 V bus)', OL_96: 'Pump overload contact 96 (NC, out to coil)',
-  PM_T1: 'Pump motor T1', PM_T2: 'Pump motor T2', PM_T3: 'Pump motor T3',
-  EN_1: 'Heating call contact (building controls), in', EN_2: 'Heating call contact (building controls), out (burner enable)',
-  BS_1: 'Burner switch, in', BS_2: 'Burner switch, out',
-  OC_1: 'Operating aquastat, in', OC_2: 'Operating aquastat, out',
-  HL_1: 'High limit (manual reset), in', HL_2: 'High limit (manual reset), out',
+  F1_OUT: 'Disconnect fuse F1, out (boiler L1)', F2_OUT: 'Disconnect fuse F2, out (boiler L2)', F3_OUT: 'Disconnect fuse F3, out (boiler L3)',
+  VFD_L1: 'VFD input L1', VFD_L2: 'VFD input L2/N', VFD_L3: 'VFD input L3',
+  VFD_U: 'VFD output U (to blower)', VFD_V: 'VFD output V (to blower)', VFD_W: 'VFD output W (to blower)',
+  BM_U: 'Blower motor lead U', BM_V: 'Blower motor lead V', BM_W: 'Blower motor lead W',
+  FUA_IN: 'Control transformer primary fuse FU1 (L1), in', FUA_OUT: 'Control transformer primary fuse FU1 (L1), out',
+  FUB_IN: 'Control transformer primary fuse FU1 (L2), in', FUB_OUT: 'Control transformer primary fuse FU1 (L2), out',
+  XF_H1: 'Control transformer H1', XF_H2: 'Control transformer H2 (208 V tap)', XF_X1: 'Control transformer X1 (115 V)', XF_X2: 'Control transformer X2 (grounded)',
+  CB_1: '115 V control circuit breaker, line', CB_2: '115 V control circuit breaker, load',
+  BS_1: 'Burner ON/OFF switch, terminal 1', BS_2: 'Burner ON/OFF switch, terminal 2',
+  FL_C: 'Blocked air filter switch C', FL_NO: 'Blocked air filter switch NO (to filter light)',
+  EN_1: 'Field enable / heating call (TB4 side)', EN_2: 'Field enable / heating call (TB5 side)',
+  HL_1: 'High limit L4008E (manual reset), C', HL_2: 'High limit L4008E (manual reset), NC',
+  OC_1: 'Operating switch RWF55 Q13', OC_2: 'Operating switch RWF55 Q14',
+  LG_1: 'Low gas pressure switch C', LG_2: 'Low gas pressure switch NO',
+  HG_1: 'High gas pressure switch C', HG_2: 'High gas pressure switch NC',
+  FS_1: 'Water flow switch NO', FS_2: 'Water flow switch C',
   LW_1: 'Low-water cutoff, in', LW_2: 'Low-water cutoff, out',
-  FS_1: 'Flow switch, in', FS_2: 'Flow switch, out (to RM terminal 6)',
-  LG_1: 'Low gas pressure switch, in', LG_2: 'Low gas pressure switch, out',
-  HG_1: 'High gas pressure switch, in', HG_2: 'High gas pressure switch, out',
-  AP_1: 'Air proving switch, common', AP_2: 'Air proving switch, normally open (to RM terminal 7)',
-  RM_L1: 'Relay module L1 (power in)', RM_L2: 'Relay module L2 (neutral)',
-  RM_3: 'Relay module 3 (blower contactor out)', RM_4: 'Relay module 4 (alarm out)',
-  RM_6: 'Relay module 6 (limits and operating control in)', RM_7: 'Relay module 7 (lockout interlock in)',
-  RM_8: 'Relay module 8 (pilot valve out)', RM_9: 'Relay module 9 (main valves out)', RM_10: 'Relay module 10 (ignition out)',
-  FT_P: 'Flame signal test jack + (V dc)', FT_N: 'Flame signal test jack − (common)',
-  AL_1: 'Alarm light, from RM 4', AL_2: 'Alarm light, neutral',
-  PV_1: 'Pilot valve coil, from RM 8', PV_2: 'Pilot valve coil, neutral',
-  V1_1: 'Main valve V1 coil, from RM 9', V1_2: 'Main valve V1 coil, neutral',
-  V2_1: 'Main valve V2 coil, from RM 9', V2_2: 'Main valve V2 coil, neutral',
-  IG_1: 'Ignition transformer primary, from RM 10', IG_2: 'Ignition transformer primary, neutral'
+  VF_1: 'Vestibule fuse switch, in', VF_2: 'Vestibule fuse switch, out (to TB6)',
+  AP_1: 'Combustion airflow switch C', AP_2: 'Combustion airflow switch NO (to TB7)',
+  RM_L2: 'RM7896D subbase L2 (neutral)', RM_3: 'RM7896D subbase 3 (alarm)', RM_4: 'RM7896D subbase 4 (blower)', RM_5: 'RM7896D subbase 5 (power)',
+  RM_6: 'RM7896D subbase 6 (limits in)', RM_7: 'RM7896D subbase 7 (lockout interlock)', RM_8: 'RM7896D subbase 8 (pilot valve)',
+  RM_9: 'RM7896D subbase 9 (main valves)', RM_10: 'RM7896D subbase 10 (ignition)',
+  FT_P: 'Flame amplifier test jack + (V dc)', FT_N: 'Flame amplifier test jack − (common)',
+  CR1_A: 'Relay CRA1 (enable blower) coil 14', CR1_B: 'Relay CRA1 (enable blower) coil 13',
+  CR2_A: 'Relay CRA2 (release to mod) coil 14', CR2_B: 'Relay CRA2 (release to mod) coil 13',
+  TD_1: 'Time delay TD-1, in (from TB9)', TD_2: 'Time delay TD-1, common',
+  PV_1: 'Pilot gas valve V4046, lead 1', PV_2: 'Pilot gas valve V4046, lead 2',
+  V1_1: 'SKP75 air/gas ratio actuator, L', V1_2: 'SKP75 air/gas ratio actuator, N',
+  V2_1: 'Secondary gas valve, lead 1', V2_2: 'Secondary gas valve, lead 2',
+  VV_1: 'Vent valve (normally open), lead 1', VV_2: 'Vent valve (normally open), lead 2',
+  IG_1: 'Ignition transformer, lead 1', IG_2: 'Ignition transformer, lead 2',
+  AL_1: 'Alarm light, from RM 3', AL_2: 'Alarm light, neutral',
+  OL_95: 'System pump overload 95 (from TB3)', OL_96: 'System pump overload 96 (to starter coil)',
+  PS_A: 'System pump starter coil A', PS_B: 'System pump starter coil B (neutral)',
+  PS_L1: 'System pump starter L1', PS_L2: 'System pump starter L2', PS_L3: 'System pump starter L3',
+  PS_T1: 'System pump starter T1', PS_T2: 'System pump starter T2', PS_T3: 'System pump starter T3',
+  PM_T1: 'System pump motor T1', PM_T2: 'System pump motor T2', PM_T3: 'System pump motor T3',
+  GND: 'Ground lug (chassis)'
 };
+for (let n = 1; n <= 12; n++) NODES['TB' + n] = 'Terminal block TB' + n;
 
-/* points joined by wire (one list per wire run) */
+/* points joined by wire (one list per wire run), following the Figure 9c wire numbers */
 const NETS = [
   ['LN_L1'], ['LN_L2'], ['LN_L3'], ['F1_IN'], ['F2_IN'], ['F3_IN'],
-  ['F1_OUT', 'XF_H1', 'M1_L1', 'PS_L1'], ['F2_OUT', 'XF_H2', 'M1_L2', 'PS_L2'], ['F3_OUT', 'M1_L3', 'PS_L3'],
-  ['M1_T1', 'BM_T1'], ['M1_T2', 'BM_T2'], ['M1_T3', 'BM_T3'], ['PS_T1', 'PM_T1'], ['PS_T2', 'PM_T2'], ['PS_T3', 'PM_T3'],
-  ['XF_X1', 'FU_IN'], ['FU_OUT', 'EN_1', 'RM_L1', 'OL_95'], ['EN_2', 'BS_1'], ['OL_96', 'PS_A'],
-  ['BS_2', 'OC_1'], ['OC_2', 'HL_1'], ['HL_2', 'LW_1'], ['LW_2', 'FS_1'], ['FS_2', 'RM_6', 'LG_1'], ['LG_2', 'HG_1'], ['HG_2', 'AP_1'], ['AP_2', 'RM_7'],
-  ['RM_3', 'M1_A'], ['RM_4', 'AL_1'], ['RM_8', 'PV_1'], ['RM_9', 'V1_1', 'V2_1'], ['RM_10', 'IG_1'],
-  ['XF_X2', 'NB', 'GND', 'PS_B', 'M1_B', 'RM_L2', 'AL_2', 'PV_2', 'V1_2', 'V2_2', 'IG_2'],
+  ['F1_OUT', 'VFD_L1', 'FUA_IN', 'PS_L1'], ['F2_OUT', 'VFD_L2', 'FUB_IN', 'PS_L2'], ['F3_OUT', 'VFD_L3', 'PS_L3'],
+  ['VFD_U', 'BM_U'], ['VFD_V', 'BM_V'], ['VFD_W', 'BM_W'],
+  ['FUA_OUT', 'XF_H1'], ['FUB_OUT', 'XF_H2'],
+  ['XF_X1', 'TB1', 'CB_1'], ['CB_2', 'TB3', 'BS_1', 'RM_5', 'OL_95'], ['BS_2', 'TB4', 'FL_C', 'EN_1'], ['FL_NO'],
+  ['EN_2', 'TB5', 'HL_1'], ['HL_2', 'OC_1'], ['OC_2', 'LG_1'], ['LG_2', 'HG_1'], ['HG_2', 'FS_1'], ['FS_2', 'LW_1'], ['LW_2', 'VF_1'],
+  ['VF_2', 'TB6', 'RM_6', 'AP_1'], ['AP_2', 'TB7', 'RM_7'],
+  ['RM_4', 'TB11', 'CR1_A'], ['RM_8', 'TB8', 'PV_1'], ['RM_9', 'TB9', 'V1_1', 'V2_1', 'VV_1', 'TD_1'], ['RM_10', 'TB10', 'IG_1'], ['RM_3', 'AL_1'],
+  ['TB12', 'CR2_A'], ['OL_96', 'PS_A'],
+  ['PS_T1', 'PM_T1'], ['PS_T2', 'PM_T2'], ['PS_T3', 'PM_T3'],
+  ['XF_X2', 'TB2', 'GND', 'RM_L2', 'CR1_B', 'CR2_B', 'TD_2', 'PV_2', 'V1_2', 'V2_2', 'VV_2', 'IG_2', 'AL_2', 'PS_B'],
   ['FT_P'], ['FT_N']
 ];
 const NET_OF = {};
 NETS.forEach((n, i) => n.forEach(x => { NET_OF[x] = i; }));
+const VFD_OUT = ['VFD_U', 'VFD_V', 'VFD_W', 'BM_U', 'BM_V', 'BM_W'];
 
 /* ---------- a small resistor-network solver: AC voltages (as phasors) with the power on, ohms with it off ---------- */
 function netGroups(els) {
@@ -126,14 +146,15 @@ function solveOhms(els, a, b) {
 const phasor = (mag, deg) => [mag * Math.cos(deg * Math.PI / 180), mag * Math.sin(deg * Math.PI / 180)];
 
 /* ---------- the boiler ---------- */
-const RM_TEXT = { OFF: 'NO POWER', INIT: 'INITIATE', STANDBY: 'STANDBY', PURGE: 'PREPURGE', PFEP: 'PILOT IGN (PFEP)', MFEP: 'MAIN IGN (MFEP)', RUN: 'RUN', POST: 'POSTPURGE', LOCKOUT: 'LOCKOUT', HOLD: 'STANDBY HOLD' };
-const RM_OUT = { 3: ['PURGE', 'PFEP', 'MFEP', 'RUN', 'POST'], 8: ['PFEP', 'MFEP'], 10: ['PFEP'], 9: ['MFEP', 'RUN'], 4: ['LOCKOUT'] };
+const RM_TEXT = { OFF: 'NO POWER', INIT: 'INITIATE', STANDBY: 'STANDBY', HOLD: 'STANDBY HOLD', PURGE: 'PREPURGE', PFEP: 'PILOT IGN', MFEP: 'MAIN IGN', RUN: 'RUN', POST: 'POSTPURGE', LOCKOUT: 'LOCKOUT' };
+const RM_OUT = { 4: ['PURGE', 'PFEP', 'MFEP', 'RUN', 'POST'], 8: ['PFEP', 'MFEP'], 10: ['PFEP'], 9: ['MFEP', 'RUN'], 3: ['LOCKOUT'] };
 
 const Boiler = {
   faults: new Set(), disc: true, call: true, burnerSw: true,
-  rm: null, Tb: 140, ocOpen: false, hlTrip: false, lgTrip: false, hgTrip: false, lockedOnce: false,
-  pilot: false, main: false, spark: false, sig: 0, air: 0, flow: 0, dp: 0, pin: 7.2, man: 0, pilotP: 0,
-  pumpRun: false, blowerRun: false, pumpHum: false, blowerHum: false, olTrip: false, humT: 0, P: 18, relief: 'dry', time: 0, seed: 1, quiet: false, V: {}, en: {}, onLog: null, resetsSinceFix: 0,
+  rm: null, Tb: 140, ocOpen: false, hlTrip: false, lgTrip: false, hgTrip: false, olTrip: false,
+  pilot: false, main: false, spark: false, sig: 0, air: 0, flow: 0, dp: 0, pin: 10.5, man: 0, pilotP: 0,
+  rate: 0, hz: 0, vfdFault: '', tdT: 0, pumpRun: false, blowerRun: false, pumpHum: false, humT: 0,
+  P: 20, relief: 'dry', time: 0, seed: 1, quiet: false, V: {}, en: {}, onLog: null, resetsSinceFix: 0,
 
   has(f) { return this.faults.has(f); },
   reset(faults, seed, opt) {
@@ -141,9 +162,10 @@ const Boiler = {
     this.faults = new Set(faults); this.seed = seed || 1;
     this.disc = true; this.call = true; this.burnerSw = true;
     this.rm = { st: 'OFF', t: 0, el: 0, ilk: false, hold: 0, hist: [], lock: '', runT: 0, lowSig: 0 };
-    this.Tb = opt.Tb != null ? opt.Tb : 138 + (seed % 5) * 2; this.ocOpen = false; this.hlTrip = false; this.lgTrip = false; this.hgTrip = false;
+    this.Tb = opt.Tb != null ? opt.Tb : 138 + (seed % 5) * 2; this.ocOpen = false; this.hlTrip = false; this.lgTrip = false; this.hgTrip = false; this.olTrip = false;
     this.pilot = false; this.main = false; this.spark = false; this.sig = 0; this.air = 0; this.flow = 0; this.dp = 0;
-    this.pumpRun = false; this.blowerRun = false; this.pumpHum = false; this.blowerHum = false; this.olTrip = false; this.humT = 0; this.time = 0; this.resetsSinceFix = 0; this.en = {};
+    this.rate = 0; this.hz = 0; this.vfdFault = ''; this.tdT = 0;
+    this.pumpRun = false; this.blowerRun = false; this.pumpHum = false; this.humT = 0; this.time = 0; this.resetsSinceFix = 0; this.en = {};
     this.line = 205 + (seed % 4) * 1.3;
     /* the boiler ran (or tried to) before the tech got there: play that out so the job is found as the customer left it */
     this.quiet = true;
@@ -154,45 +176,53 @@ const Boiler = {
   },
 
   /* ----- switch positions decided by the physical state ----- */
-  ocClosed() { if (this.has('oc_bad')) return false; if (this.has('oc_stuck')) return true; return !this.ocOpen; },
+  ocClosed() { if (this.has('oc_bad') || this.has('rwf_sensor')) return false; return !this.ocOpen; },
+  /* what the RWF55 thinks the water is: a drifted sensor reads 45°F low, so the controller overfires */
+  rwfT() { return this.has('sensor_low') ? this.Tb - 45 : this.Tb; },
   hlClosed() { return !this.has('hl_bad') && !this.hlTrip; },
   lowWater() { return this.has('low_water'); },
   lwClosed() { if (this.has('jmp_lwco')) return true; return !this.has('lwco_dirty') && !this.lowWater(); },
-  fsClosed() { return !this.has('fs_bad') && this.flow >= 20; },
-  apClosed() { if (this.has('aps_weld')) return true; return !this.has('aps_bad') && !this.has('aps_tube') && this.air >= 0.5; },
-  rmPowered() { return this.rmOK() && this.mag('RM_L1') > 90; },
+  fsClosed() { return !this.has('fs_bad') && this.flow >= FS_MAKE; },
+  apClosed() { if (this.has('aps_weld')) return true; return !this.has('aps_bad') && !this.has('aps_tube') && this.air >= 0.3; },
+  filterDirty() { return this.has('filter_dirty'); },
   rmOK() { return !this.has('rm_bad'); },
-  out(n) { const r = this.rm; return !!(r && this.rmOK() && this.lastPow && RM_OUT[n].indexOf(r.st) >= 0); },
+  rmPowered() { return this.rmOK() && this.mag('RM_5') > 90; },
+  out(n) {
+    const r = this.rm;
+    if (!(r && this.rmOK() && this.lastPow && RM_OUT[n].indexOf(r.st) >= 0)) return false;
+    return n !== 10 || r.el < 5;          /* early spark termination: ignition only the first 5 s of the pilot trial */
+  },
 
   elements() {
     const f = this.faults, O = Infinity, sw = on => on ? 0 : O, en = this.en;
     const leg = k => f.has('fuse_L' + k) ? O : 0;
-    const m1 = k => sw(en.m1 && !(k === 3 && f.has('m1_pole')));
     return [
       /* 208 V power */
       ['LN_L1', 'F1_IN', sw(this.disc)], ['LN_L2', 'F2_IN', sw(this.disc)], ['LN_L3', 'F3_IN', sw(this.disc)],
       ['F1_IN', 'F1_OUT', leg(1)], ['F2_IN', 'F2_OUT', leg(2)], ['F3_IN', 'F3_OUT', leg(3)],
-      ['XF_H1', 'XF_H2', f.has('xfmr_open') ? O : 45],
-      ['M1_L1', 'M1_T1', m1(1)], ['M1_L2', 'M1_T2', m1(2)], ['M1_L3', 'M1_T3', m1(3)],
+      ['VFD_L1', 'VFD_L2', 300], ['VFD_L2', 'VFD_L3', 300], ['VFD_L3', 'VFD_L1', 300],
+      ['FUA_IN', 'FUA_OUT', f.has('fuse_open') ? O : 0], ['FUB_IN', 'FUB_OUT', 0], ['XF_H1', 'XF_H2', f.has('xfmr_open') ? O : 45],
       ['PS_L1', 'PS_T1', sw(en.ps)], ['PS_L2', 'PS_T2', sw(en.ps)], ['PS_L3', 'PS_T3', sw(en.ps)],
-      /* motor windings in delta */
-      ['BM_T1', 'BM_T2', f.has('blower_open') ? O : 9.6], ['BM_T2', 'BM_T3', 9.6], ['BM_T3', 'BM_T1', 9.6],
-      ['PM_T1', 'PM_T2', f.has('pm_open') ? O : 7.2], ['PM_T2', 'PM_T3', 7.2], ['PM_T3', 'PM_T1', 7.2],
-      /* 120 V control */
-      ['FU_IN', 'FU_OUT', f.has('fuse_open') ? O : 0],
-      ['EN_1', 'EN_2', sw(this.call)], ['OL_95', 'OL_96', sw(!this.olTrip)], ['PS_A', 'PS_B', f.has('ps_coil') ? O : 260],
-      ['M1_A', 'M1_B', f.has('m1_coil') ? O : 280],
-      ['BS_1', 'BS_2', sw(this.burnerSw)], ['OC_1', 'OC_2', sw(this.ocClosed())], ['HL_1', 'HL_2', sw(this.hlClosed())],
-      ['LW_1', 'LW_2', sw(this.lwClosed())], ['FS_1', 'FS_2', sw(this.fsClosed())],
-      ['LG_1', 'LG_2', sw(!this.lgTrip)], ['HG_1', 'HG_2', sw(!this.hgTrip)], ['AP_1', 'AP_2', sw(this.apClosed())],
-      ['RM_L1', 'RM_L2', 3300], ['RM_6', 'RM_L2', 22000], ['RM_7', 'RM_L2', 22000],
-      ['RM_L1', 'RM_3', sw(this.out(3))], ['RM_L1', 'RM_4', sw(this.out(4))], ['RM_L1', 'RM_8', sw(this.out(8))], ['RM_L1', 'RM_9', sw(this.out(9))], ['RM_L1', 'RM_10', sw(this.out(10))],
-      ['AL_1', 'AL_2', 150], ['PV_1', 'PV_2', f.has('pv_open') ? O : 640],
-      ['V1_1', 'V1_2', f.has('v1_open') ? O : 1150], ['V2_1', 'V2_2', f.has('v2_open') ? O : 1150], ['IG_1', 'IG_2', f.has('ig_open') ? O : 2.2]
+      /* motor windings (delta): 2 hp blower behind the VFD, 5 hp system pump */
+      ['BM_U', 'BM_V', f.has('blower_open') ? O : 2.4], ['BM_V', 'BM_W', 2.4], ['BM_W', 'BM_U', 2.4],
+      ['PM_T1', 'PM_T2', f.has('pm_open') ? O : 0.9], ['PM_T2', 'PM_T3', 0.9], ['PM_T3', 'PM_T1', 0.9],
+      /* 115 V control */
+      ['CB_1', 'CB_2', f.has('cb_bad') ? O : 0],
+      ['BS_1', 'BS_2', sw(this.burnerSw && !f.has('bs_bad'))], ['TB4', 'TB2', this.burnerSw ? 3000 : O],
+      ['FL_C', 'FL_NO', sw(this.filterDirty())], ['FL_NO', 'TB2', 3000],
+      ['EN_1', 'EN_2', sw(this.call)], ['HL_1', 'HL_2', sw(this.hlClosed())], ['OC_1', 'OC_2', sw(this.ocClosed())],
+      ['LG_1', 'LG_2', sw(!this.lgTrip)], ['HG_1', 'HG_2', sw(!this.hgTrip)], ['FS_1', 'FS_2', sw(this.fsClosed())],
+      ['LW_1', 'LW_2', sw(this.lwClosed())], ['VF_1', 'VF_2', sw(!f.has('vf_open'))], ['AP_1', 'AP_2', sw(this.apClosed())],
+      ['RM_5', 'RM_L2', 3300], ['RM_6', 'RM_L2', 22000], ['RM_7', 'RM_L2', 22000],
+      ['RM_5', 'RM_3', sw(this.out(3))], ['RM_5', 'RM_4', sw(this.out(4))], ['RM_5', 'RM_8', sw(this.out(8))], ['RM_5', 'RM_9', sw(this.out(9))], ['RM_5', 'RM_10', sw(this.out(10))],
+      ['CR1_A', 'CR1_B', f.has('cra1_coil') ? O : 1100], ['TD_1', 'TD_2', 6000], ['TD_1', 'TB12', sw(this.tdT >= 20)], ['CR2_A', 'CR2_B', 1100],
+      ['PV_1', 'PV_2', f.has('pv_open') ? O : 640], ['V1_1', 'V1_2', f.has('v1_open') ? O : 900], ['V2_1', 'V2_2', f.has('v2_open') ? O : 1150],
+      ['VV_1', 'VV_2', 1150], ['IG_1', 'IG_2', f.has('ig_open') ? O : 2.2], ['AL_1', 'AL_2', 150],
+      ['OL_95', 'OL_96', sw(!this.olTrip)], ['PS_A', 'PS_B', f.has('ps_coil') ? O : 260]
     ];
   },
   /* wye 208 V service with a grounded neutral: each leg is 120 V to ground. The control transformer secondary follows
-     whatever its primary sees, so it is solved in two passes: power side first, then the 120 V side from X1 */
+     whatever its primary sees, so it is solved in two passes: power side first, then the 115 V side from X1 */
   solve() {
     const L = this.line / Math.sqrt(3), src = { LN_L1: phasor(L, 0), LN_L2: phasor(L, -120), LN_L3: phasor(L, 120), GND: [0, 0] };
     const els = this.elements();
@@ -207,8 +237,17 @@ const Boiler = {
   vAt(id) { const v = this.V[NET_OF[id]]; return v == null ? null : v; },
   mag(id) { const v = this.vAt(id); return v ? Math.hypot(v[0], v[1]) : 0; },
   across(a, b) { const x = this.vAt(a), y = this.vAt(b); if (x == null || y == null) return 0; return Math.hypot(x[0] - y[0], x[1] - y[1]); },
+  /* the VFD output is a variable-frequency supply of its own: about 208 V at 60 Hz, falling with speed (V/Hz) */
+  vfdOutV() { return this.blowerRun || (this.en.vfdRun && this.has('blower_open')) ? 208 * this.hz / 60 : 0; },
   volts(a, b) {
     if (a === 'FT_P' || a === 'FT_N' || b === 'FT_P' || b === 'FT_N') return 0;
+    const ao = VFD_OUT.indexOf(a) >= 0, bo = VFD_OUT.indexOf(b) >= 0;
+    if (ao || bo) {
+      const v = this.vfdOutV(), pa = ao ? a.slice(-1) : null, pb = bo ? b.slice(-1) : null;
+      if (ao && bo) return pa === pb ? 0 : v;
+      const other = ao ? b : a;
+      return NET_OF[other] === NET_OF.GND ? v / Math.sqrt(3) : 0;
+    }
     return this.across(a, b);
   },
   dcVolts(a, b) {
@@ -227,87 +266,102 @@ const Boiler = {
     const f = this.faults;
     for (let k = 0; k < 3; k++) {        /* settle: coils pull in, then their contacts change the circuit */
       this.solve();
-      this.lastPow = this.rmOK() && this.mag('RM_L1') > 90;
+      this.lastPow = this.rmOK() && this.mag('RM_5') > 90;
       this.en.ps = this.across('PS_A', 'PS_B') > 85 && !f.has('ps_coil');
-      this.en.m1 = this.across('M1_A', 'M1_B') > 85 && !f.has('m1_coil');
     }
     const on = (a, b) => this.across(a, b) > 90;
-    /* a 3-phase motor starts only with all three legs; on two legs (single-phasing) or with a winding open it hums */
-    const three = (p, k) => on(p + '1', p + '2') && on(p + '2', p + '3') && on(p + '3', p + '1') && Math.min(this.across(p + '1', p + '2'), this.across(p + '2', p + '3'), this.across(p + '3', p + '1')) > 180;
-    const any = p => on(p + '1', p + '2') || on(p + '2', p + '3') || on(p + '3', p + '1');
-    const pumpV = three('PM_T') && !f.has('pm_open'), blowV = three('BM_T') && !f.has('blower_open');
-    this.pumpHum = !pumpV && any('PM_T'); this.blowerHum = !blowV && any('BM_T');
-    /* the pump overload trips after a few seconds of locked-rotor current and stays out until someone resets it */
-    if (this.pumpHum) { this.humT += dt; if (this.humT > 8) { this.olTrip = true; this.note('Pump overload tripped.'); } } else this.humT = 0;
-    this.en.pumpV = pumpV || this.pumpHum; this.en.blowV = blowV || this.blowerHum;
+    this.en.cra1 = on('CR1_A', 'CR1_B') && !f.has('cra1_coil');
+    this.en.cra2 = on('CR2_A', 'CR2_B');
     this.en.pv = on('PV_1', 'PV_2') && !f.has('pv_open');
     this.en.v1 = on('V1_1', 'V1_2') && !f.has('v1_open');
     this.en.v2 = on('V2_1', 'V2_2') && !f.has('v2_open');
+    this.en.vv = on('VV_1', 'VV_2');                                 /* vent valve closes when energized */
     this.en.ig = on('IG_1', 'IG_2') && !f.has('ig_open');
     this.en.alarm = on('AL_1', 'AL_2');
+    this.en.td = on('TD_1', 'TD_2');
+    this.tdT = this.en.td ? this.tdT + dt * SPEED : 0;
 
-    /* water side */
+    /* system pump (by others): a 3-phase motor starts only with all three legs; on two legs it hums and the overload trips */
+    const three = p => Math.min(this.across(p + '1', p + '2'), this.across(p + '2', p + '3'), this.across(p + '3', p + '1')) > 180;
+    const any = p => on(p + '1', p + '2') || on(p + '2', p + '3') || on(p + '3', p + '1');
+    const pumpV = three('PM_T') && !f.has('pm_open');
+    this.pumpHum = !pumpV && any('PM_T');
+    if (this.pumpHum) { this.humT += dt; if (this.humT > 8) { this.olTrip = true; this.note('System pump overload tripped.'); } } else this.humT = 0;
     this.pumpRun = pumpV;
     let flow = 0, dp = 0;
     if (this.pumpRun) {
       if (f.has('coupler')) { flow = 0; dp = 0; }
-      else if (f.has('iso_closed')) { flow = 0; dp = 13.8; }
-      else if (f.has('air_bound')) { const w = Math.sin(this.time * 0.9) * 0.5 + Math.sin(this.time * 2.3) * 0.5; flow = 13 + 10 * w; dp = 2.2 + 1.4 * w; }
-      else if (f.has('strainer')) { flow = 38; dp = 12.6; }
-      else { flow = 80; dp = 9.4; }
+      else if (f.has('iso_closed')) { flow = 0; dp = 24.5; }
+      else if (f.has('air_bound')) { const w = Math.sin(this.time * 0.9) * 0.5 + Math.sin(this.time * 2.3) * 0.5; flow = 105 + 45 * w; dp = 7 + 3 * w; }
+      else if (f.has('strainer')) { flow = 122; dp = 21; }
+      else { flow = 200; dp = 18; }
     }
     this.flow = flow; this.dp = dp;
 
-    /* air: blower static pressure at the air switch port, in. w.c. */
-    this.blowerRun = blowV;
-    this.air = this.blowerRun ? (f.has('blower_dirty') ? 0.62 : 1.40) : 0;
+    /* VFD and blower: CRA1 gives the run command; the drive needs all three input legs; it trips and latches on a fault */
+    const vfdPow = !f.has('vfd_bad') && Math.min(this.across('VFD_L1', 'VFD_L2'), this.across('VFD_L2', 'VFD_L3'), this.across('VFD_L3', 'VFD_L1')) > 150;
+    const vfdLive = !f.has('vfd_bad') && this.across('VFD_L1', 'VFD_L2') > 150;
+    if (!vfdLive) this.vfdFault = '';                 /* removing power clears a latched drive fault */
+    this.en.vfdLive = vfdLive;
+    this.en.vfdRun = this.en.cra1 && vfdLive && !this.vfdFault;
+    if (this.en.vfdRun && !vfdPow) { this.vfdFault = 'INPUT PHASE LOSS'; this.note('VFD tripped: input phase loss.'); }
+    else if (this.en.vfdRun && f.has('blower_open')) { this.vfdFault = 'OUTPUT PHASE LOSS'; this.note('VFD tripped: output phase loss.'); }
+    this.en.vfdRun = this.en.cra1 && vfdLive && !this.vfdFault;
+
+    /* firing rate from the RWF55: low fire hold until CRA2 releases modulation, then follow the load */
+    const want = this.en.cra2 ? Math.max(0.25, Math.min(1, 0.25 + (RWF_SP + 8 - this.rwfT()) * 0.05)) : 0.25;
+    this.rate = this.en.vfdRun ? this.rate + (want - this.rate) * Math.min(1, dt * 0.4) : 0;
+    this.hz = this.en.vfdRun ? 15 + 45 * this.rate : 0;
+    this.blowerRun = this.en.vfdRun;
+    this.air = this.blowerRun ? (0.08 + 2.0 * Math.pow(this.hz / 60, 2)) * (this.filterDirty() ? 0.72 : 1) : 0;
 
     /* gas pressures, in. w.c. */
     const firing = this.main;
-    this.pin = f.has('gas_closed') ? 0 : f.has('gas_low') ? (firing ? 2.4 : 3.0) : (firing ? 6.6 : 7.2);
-    if (this.pin < 3.5) this.lgTrip = true;
+    this.pin = f.has('gas_closed') ? 0 : f.has('gas_low') ? (firing ? 5.4 - 1.4 * this.rate : 5.6) : (firing ? 10.5 - 1.6 * this.rate : 10.6);
+    if (this.pin < 5.0) { if (!this.lgTrip) this.note('Low gas pressure switch tripped.'); this.lgTrip = true; }
     const mainOpen = this.en.v1 && this.en.v2;
-    this.man = mainOpen && this.pin > 0.3 ? Math.min(this.pin - 0.2, f.has('reg_high') ? 6.2 : f.has('reg_low') ? 1.6 : 3.5) : 0;
-    if (this.man > 5.0) this.hgTrip = true;
+    this.man = mainOpen && this.pin > 0.3 ? Math.min(this.pin - 0.3, (0.35 + 1.65 * this.rate) * (f.has('ratio_lean') ? 0.8 : 1) + (f.has('reg_high') ? 1.7 * this.rate : 0)) : 0;
+    if (f.has('vent_open') && mainOpen) this.man *= 0.15;                  /* a vent valve stuck open bleeds the gas between the valves to outdoors */
+    if (this.man > 3.0) { if (!this.hgTrip) this.note('High gas pressure switch tripped.'); this.hgTrip = true; }
     this.pilotP = this.en.pv && this.pin > 0.3 && !f.has('pilot_cock') ? 3.0 : 0;
 
-    /* flame */
+    /* flame: interrupted pilot lit by the ignitor, main lit from the pilot; UV scanner sees both */
     this.spark = this.en.ig && !f.has('electrode');
-    const pilotGas = this.pilotP > 1;
-    this.pilot = pilotGas && (this.spark || this.pilot);
-    this.main = mainOpen && this.man > 0.8 && (this.pilot || this.main) && this.blowerRun;
+    this.pilot = this.pilotP > 1 && (this.spark || this.pilot);
+    this.main = mainOpen && this.man > 0.3 && (this.pilot || this.main) && this.blowerRun;
     let s = 0;
-    if (this.main) s = f.has('linkage') ? 2.1 : f.has('reg_low') ? 2.4 : 3.9;
-    if (this.pilot) s = this.main ? s + 0.3 : 2.6;
-    if (f.has('lens_dirty')) s *= 0.35;
+    if (this.main) s = f.has('ratio_lean') ? 1.7 + 0.6 * this.rate : 3.0 + 1.0 * this.rate;
+    if (this.pilot) s = this.main ? s + 0.2 : 2.3;
+    if (f.has('lens_dirty')) s *= 0.4;
     if (f.has('scanner_bad') || f.has('amp_bad')) s = 0;
     s = s ? Math.min(5, s * (1 + Math.sin(this.time * 1.7) * 0.03)) : 0;
     this.sig = s;
 
     this.rmStep(dt * SPEED);
 
-    /* boiler water temperature: burner heat in, building load out */
-    const qIn = this.main ? (f.has('reg_low') ? 680 : 1000) * this.eff() / 100 : 0;
-    const qLoad = (this.flow > 5 ? 450 * Math.min(1, this.flow / 60) : 25) * Math.max(0, this.Tb - 70) / 110;
+    /* boiler water temperature: burner heat in, building load out (system water keeps moving) */
+    const qIn = this.main ? 3000 * this.rate * this.eff() / 100 : 0;
+    const qLoad = (this.flow > 20 ? 1800 * Math.min(1, this.flow / 150) : 40) * Math.max(0, this.Tb - 70) / 110;
     this.qLoad = qLoad;
-    this.Tb += (qIn - qLoad) / 509 * dt;
-    if (this.Tb >= OC_SET) this.ocOpen = true; else if (this.Tb <= OC_SET - OC_DIFF) this.ocOpen = false;
+    this.Tb += (qIn - qLoad) / 1465 * dt;
+    if (this.has('rwf_sensor')) this.ocOpen = true;
+    else if (this.rwfT() >= RWF_OFF) this.ocOpen = true; else if (this.rwfT() <= RWF_ON) this.ocOpen = false;
     if (this.Tb >= HL_SET && !f.has('hl_bad')) { if (!this.hlTrip) this.note('High limit tripped at ' + Math.round(this.Tb) + '°F.'); this.hlTrip = true; }
 
     /* system pressure: cold fill plus expansion; a waterlogged tank lets it climb to the relief valve */
-    const base = this.lowWater() ? 3.2 : 12;
-    let P = base + (this.Tb - 70) * (f.has('tank_logged') ? 0.32 : 0.075);
+    const base = this.lowWater() ? 4 : 15;
+    let P = base + (this.Tb - 70) * (f.has('tank_logged') ? 0.35 : 0.075);
     this.relief = 'dry';
-    if (P >= 30) { P = 30 + (P - 30) * 0.05; this.relief = 'discharging'; }
-    else if (f.has('relief_bad') && P > 19) this.relief = 'dripping';
+    if (P >= RELIEF) { P = RELIEF + (P - RELIEF) * 0.05; this.relief = 'discharging'; }
+    else if (f.has('relief_bad') && P > 21) this.relief = 'dripping';
     this.P = P;
   },
-  eff() { const f = this.faults; return f.has('tubes_soot') ? 76.8 : f.has('linkage') ? 77.5 : f.has('blower_dirty') ? 80.6 : f.has('reg_low') ? 80.2 : 82.1; },
+  eff() { const f = this.faults; return f.has('hx_soot') ? 83.0 : f.has('ratio_lean') ? 84.5 : f.has('filter_dirty') ? 85.8 : 87.0; },
   note(m) { if (!this.quiet && this.onLog) this.onLog(m); },
 
-  /* ----- the flame safeguard ----- */
+  /* ----- the flame safeguard (RM7896D, 30 s purge card) ----- */
   rmStep(d) {
-    const r = this.rm, pow = this.rmOK() && this.mag('RM_L1') > 90;
+    const r = this.rm, pow = this.rmOK() && this.mag('RM_5') > 90;
     const t6 = this.mag('RM_6') > 90, t7 = this.mag('RM_7') > 90, flame = this.sig >= FLAME_MIN;
     const go = (st, t) => { r.st = st; r.t = t || 0; r.el = 0; r.ilk = false; r.hold = 0; };
     const lock = msg => { r.hist.unshift({ msg, at: RM_TEXT[r.st] }); r.hist = r.hist.slice(0, 6); r.lock = msg; go('LOCKOUT'); this.note('Flame safeguard LOCKOUT: ' + msg); };
@@ -325,26 +379,26 @@ const Boiler = {
       case 'PURGE':
         if (!t6) { go('STANDBY'); break; }
         if (t7) r.ilk = true;
-        else if (r.ilk) { lock('Lockout interlock opened during prepurge'); break; }
-        else if (r.el > 10) { lock('Lockout interlock did not prove in prepurge (airflow / gas pressure switches)'); break; }
+        else if (r.ilk) { lock('Lockout interlock (combustion airflow switch) opened during prepurge'); break; }
+        else if (r.el > 10) { lock('Lockout interlock (combustion airflow switch) did not prove in prepurge'); break; }
         if (flame) { lock('Flame signal during prepurge'); break; }
         if (r.t <= 0 && r.ilk) go('PFEP', 10);
         break;
       case 'PFEP':
-        if (!t6) { go('POST', 15); break; }
-        if (!t7) { lock('Lockout interlock opened during pilot ignition'); break; }
-        if (r.t <= 0) { if (flame) go('MFEP', 10); else lock('Pilot flame fail (PFEP): no flame proven at end of pilot trial'); }
+        if (!t6) { go('POST', 60); break; }
+        if (!t7) { lock('Lockout interlock (combustion airflow switch) opened during pilot ignition'); break; }
+        if (r.t <= 0) { if (flame) go('MFEP', 5); else lock('Pilot flame fail (PFEP): no flame proven at end of pilot trial'); }
         break;
       case 'MFEP':
-        if (!t6) { go('POST', 15); break; }
-        if (!t7) { lock('Lockout interlock opened during main ignition'); break; }
+        if (!t6) { go('POST', 60); break; }
+        if (!t7) { lock('Lockout interlock (combustion airflow switch) opened during main ignition'); break; }
         if (!flame) { lock('Flame fail during main flame establishing period (MFEP)'); break; }
         if (r.t <= 0) { go('RUN'); r.runT = 0; r.lowSig = 0; }
         break;
       case 'RUN':
         r.runT += d;
-        if (!t6) { go('POST', 15); break; }
-        if (!t7) { lock('Lockout interlock opened while running (airflow / gas pressure)'); break; }
+        if (!t6) { go('POST', 60); break; }
+        if (!t7) { lock('Lockout interlock (combustion airflow switch) opened while running'); break; }
         if (!flame) { r.lowSig += d; if (r.lowSig >= 1.5) { lock(r.runT < 6 ? 'Main flame did not prove at end of MFEP (main flame ignition)' : 'Main flame fail (RUN)'); break; } } else r.lowSig = 0;
         break;
       case 'POST': if (r.t <= 0) go('STANDBY'); break;
@@ -354,101 +408,104 @@ const Boiler = {
   rmReset(silent) {
     const r = this.rm;
     if (r.st !== 'LOCKOUT') return false;
-    if (!this.rmOK() || this.mag('RM_L1') < 90) return false;
+    if (!this.rmOK() || this.mag('RM_5') < 90) return false;
     r.st = 'INIT'; r.t = 10; r.el = 0; r.lock = '';
     if (!silent) this.resetsSinceFix++;
     return true;
   },
 
   /* ----- readings for the tools ----- */
-  /* clamp readings. Motor legs: running current, or locked-rotor current on the legs that still have power */
   amps(where) {
     const j = v => v * (1 + Math.sin(this.time * 3.1) * 0.01), f = this.faults;
-    const pumpRun = f.has('coupler') ? 1.4 : f.has('iso_closed') ? 2.4 : f.has('air_bound') ? 2.1 + Math.sin(this.time * 0.9) * 0.3 : f.has('strainer') ? 2.9 : 3.3;
-    /* on a lost leg the dead terminal only shows a phantom voltage (about half) to the others, and carries no current */
+    const pumpRun = f.has('coupler') ? 5.2 : f.has('iso_closed') ? 9.6 : f.has('air_bound') ? 8.5 + Math.sin(this.time * 0.9) * 1.2 : f.has('strainer') ? 11.4 : 13.6;
+    /* on a lost leg the dead terminal only shows a phantom voltage to the others, and carries no current */
     const motor = (run, hum, p, runA, lra, k) => run ? runA : !hum ? 0 : [1, 2, 3].some(o => o !== k && this.across(p + k, p + o) > 180) ? lra : 0;
     const m = {};
-    [1, 2, 3].forEach(k => {
-      m['pump' + k] = motor(this.pumpRun, this.pumpHum, 'PM_T', pumpRun, 16.5, k);
-      m['blower' + k] = motor(this.blowerRun, this.blowerHum, 'BM_T', f.has('blower_dirty') ? 2.0 : 2.6, 13.8, k);
-    });
-    const ign = this.en.ig ? 1.3 : 0, pv = this.en.pv ? 0.19 : 0, mv = (this.en.v1 ? 0.1 : 0) + (this.en.v2 ? 0.1 : 0), al = this.en.alarm ? 0.35 : 0;
-    const coils = (this.en.ps ? 0.45 : 0) + (this.en.m1 ? 0.4 : 0), rmc = this.lastPow ? 0.04 : 0;
+    [1, 2, 3].forEach(k => { m['pump' + k] = motor(this.pumpRun, this.pumpHum, 'PM_T', pumpRun, 92, k); });
+    const bl = this.blowerRun ? (1.6 + 5.0 * Math.pow(this.rate, 2)) * (f.has('filter_dirty') ? 0.82 : 1) : 0;
+    m.blower = bl;
+    m.vfdin = this.en.vfdLive ? 0.25 + bl * (this.hz / 60) * 0.95 : 0;
+    const ign = this.en.ig ? 1.3 : 0, pv = this.en.pv ? 0.19 : 0, mv = (this.en.v1 ? 0.14 : 0) + (this.en.v2 ? 0.1 : 0) + (this.en.vv ? 0.1 : 0);
+    const coils = (this.en.ps ? 0.45 : 0) + (this.en.cra1 ? 0.1 : 0) + (this.en.cra2 ? 0.1 : 0) + (this.en.alarm ? 0.35 : 0), rmc = this.lastPow ? 0.04 : 0;
     m.ign = ign;
-    m.x1 = ign + pv + mv + al + coils + rmc;
-    m.line = m.pump1 + m.blower1 + m.x1 * XF_RATIO;
+    m.x1 = ign + pv + mv + coils + rmc + (this.burnerSw ? 0.04 : 0);
+    m.line = m.pump1 + m.vfdin + m.x1 * XF_RATIO;
     return j(m[where] || 0);
   },
   analyzer() {
     if (!this.main) return null;
     const f = this.faults;
-    let o2 = 4.5, co = 35, st = 405;
-    if (f.has('blower_dirty')) { o2 = 1.2; co = 780; st = 430; }
-    if (f.has('linkage')) { o2 = 9.4; co = 18; st = 440; }
-    if (f.has('tubes_soot')) { o2 = Math.min(o2, 4.3); co = Math.max(co, 62); st = 575; }
-    if (f.has('reg_low')) { o2 = 8.1; co = 25; st = 330; }
-    const co2 = (20.9 - o2) / 20.9 * 11.7;
-    const coAF = co * 20.9 / (20.9 - o2);
-    const w = 1 + Math.sin(this.time * 1.3) * 0.02;
-    return { o2: o2 * w, co: Math.round(co * w), co2, coAF: Math.round(coAF * w), stack: Math.round(st * (1 + Math.sin(this.time) * 0.004)), eff: this.eff(), draft: -0.02 };
+    let o2 = 5.2 - this.rate * 0.6, co = 22, st = 250 + 70 * this.rate;
+    if (f.has('filter_dirty')) { o2 = 1.6; co = 520; st += 8; }
+    if (f.has('ratio_lean')) { o2 = 9.0; co = 14; st += 15; }
+    if (f.has('hx_soot')) { co = Math.max(co, 60); st += 110; }
+    const co2 = (20.9 - o2) / 20.9 * 11.7, coAF = co * 20.9 / (20.9 - o2), w = 1 + Math.sin(this.time * 1.3) * 0.02;
+    return { o2: o2 * w, co: Math.round(co * w), co2, coAF: Math.round(coAF * w), stack: Math.round(st * (1 + Math.sin(this.time) * 0.004)), eff: this.eff(), rate: this.rate };
   },
-  returnT() { if (this.flow < 5) return this.Tb - 25; return this.Tb - Math.min(60, (this.qLoad || 0) * 1000 / (500 * this.flow)); },
+  returnT() { if (this.flow < 20) return this.Tb - 25; return this.Tb - Math.min(60, (this.qLoad || 0) * 1000 / (500 * this.flow)); },
+  vfdText() { if (!this.en.vfdLive) return ''; if (this.vfdFault) return 'FAULT: ' + this.vfdFault; return this.en.vfdRun ? 'RUN ' + this.hz.toFixed(1) + ' Hz' : 'STOP'; },
   status() {
-    const f = this.faults;
+    const f = this.faults, ctl = this.mag('TB3') > 90;
     return {
       rm: this.rm.st, flame: this.main ? 'main' : this.pilot ? 'pilot' : this.spark ? 'spark' : 'none',
-      blower: this.blowerRun ? 'run' : this.blowerHum ? 'hum' : 'off',
+      blower: this.blowerRun ? 'run' : 'off',
       pump: this.pumpRun ? 'run' : this.pumpHum ? 'hum' : 'off',
       alarm: this.en.alarm, Tb: this.Tb, P: this.P, Tr: this.returnT(), relief: this.relief,
-      lwLamp: this.lastPow !== undefined && this.mag('FU_OUT') > 90 && (f.has('lwco_dirty') || this.lowWater()),
-      hlTrip: this.hlTrip, lgTrip: this.lgTrip, hgTrip: this.hgTrip, olTrip: this.olTrip
+      lwLamp: ctl && (f.has('lwco_dirty') || this.lowWater()), filterLamp: this.mag('FL_NO') > 90, burnerLamp: this.mag('TB4') > 90,
+      hlTrip: this.hlTrip, lgTrip: this.lgTrip, hgTrip: this.hgTrip, olTrip: this.olTrip, vfd: this.vfdText(), rate: this.main ? this.rate : 0
     };
   },
   healthy() {
-    return this.faults.size === 0 && !this.hlTrip && !this.lgTrip && !this.hgTrip && !this.olTrip && this.rm.st === 'RUN' && this.rm.runT > 4;
+    return this.faults.size === 0 && !this.hlTrip && !this.lgTrip && !this.hgTrip && !this.olTrip && !this.vfdFault && this.rm.st === 'RUN' && this.rm.runT > 4;
   }
 };
 
 /* ---- parts.js ---- */
-/* ===== Parts counter: every part or action a trainee can pick, and which fault each one cures ===== */
+/* ===== Parts counter: every part or action a trainee can pick, and which fault each one cures.
+   Part names follow the EVA I&O manual repair parts list (EVA-3000 column). ===== */
 const PARTS = {
-  pfuse:     { name: 'Disconnect fuse (one leg, 15 A)', g: 'Power and controls' },
-  xfmr:      { name: 'Control transformer (208 / 120 V)', g: 'Power and controls' },
-  fuse:      { name: 'Control fuse FU4 (3 A)', g: 'Power and controls' },
-  pstarter:  { name: 'Pump starter (contactor with 120 V coil)', g: 'Power and controls' },
-  olreset:   { name: 'Press the reset button on the pump overload', g: 'Power and controls', live: true, reset: 'ol' },
-  m1:        { name: 'Blower contactor M1 (120 V coil)', g: 'Power and controls' },
-  oc:        { name: 'Operating aquastat', g: 'Power and controls' },
-  hl:        { name: 'High limit aquastat (manual reset)', g: 'Power and controls' },
-  hlreset:   { name: 'Press the reset button on the high limit', g: 'Power and controls', live: true, reset: 'hl' },
-  rm:        { name: 'Flame safeguard relay module', g: 'Flame safeguard' },
-  amp:       { name: 'Flame amplifier (plug-in card)', g: 'Flame safeguard' },
-  scanner:   { name: 'UV flame scanner', g: 'Flame safeguard' },
-  scanclean: { name: 'Clean the flame scanner lens and sight tube', g: 'Flame safeguard' },
+  pfuse:     { name: 'Disconnect fuse (one leg) — fused disconnect by others', g: 'Power and controls' },
+  fuse:      { name: 'Control transformer primary fuse FU1', g: 'Power and controls' },
+  xfmr:      { name: 'Control transformer (208 / 115 V)', g: 'Power and controls' },
+  cb:        { name: '115 V control circuit breaker (5 A)', g: 'Power and controls' },
+  bs:        { name: 'Burner ON/OFF switch with light', g: 'Power and controls' },
+  rwf:       { name: 'RWF55 temperature controller (operating limit)', g: 'Power and controls' },
+  sensor:    { name: 'Supply water temperature sensor (RWF55)', g: 'Power and controls' },
+  hl:        { name: 'High limit L4008E (manual reset)', g: 'Power and controls' },
+  hlreset:   { name: 'Press the reset button on the L4008E high limit', g: 'Power and controls', live: true, reset: 'hl' },
+  cra1:      { name: 'Relay CRA1 (enable blower)', g: 'Power and controls' },
+  vfd:       { name: 'Variable frequency drive (A/C Tech SCF, 208/230 V)', g: 'Power and controls' },
+  vfdreset:  { name: 'Press STOP/RESET on the VFD keypad', g: 'Power and controls', live: true, reset: 'vfd' },
+  vfuse:     { name: 'Vestibule fuse switch', g: 'Power and controls' },
+  pstarter:  { name: 'System pump starter (by others)', g: 'Power and controls' },
+  olreset:   { name: 'Press the reset button on the system pump overload', g: 'Power and controls', live: true, reset: 'ol' },
+  rm:        { name: 'Flame safeguard RM7896D', g: 'Flame safeguard' },
+  amp:       { name: 'UV amplifier card R7849A', g: 'Flame safeguard' },
+  scanner:   { name: 'Ultraviolet sensor (UV scanner)', g: 'Flame safeguard' },
+  scanclean: { name: 'Clean the UV scanner lens and scanner tube', g: 'Flame safeguard' },
   ignx:      { name: 'Ignition transformer', g: 'Burner' },
-  electrode: { name: 'Ignition electrode (set the gap)', g: 'Burner' },
-  pilotv:    { name: 'Pilot gas valve', g: 'Burner' },
-  pilotcock: { name: 'Open the pilot gas cock', g: 'Burner', live: true },
-  blower:    { name: 'Burner blower motor', g: 'Burner' },
-  blowclean: { name: 'Clean the blower wheel and air inlet', g: 'Burner' },
-  aps:       { name: 'Air proving switch', g: 'Burner' },
-  apstube:   { name: 'Air proving switch sensing tube', g: 'Burner' },
-  linkage:   { name: 'Reset the air damper linkage (combustion setup)', g: 'Burner', live: true },
-  tubes:     { name: 'Brush the fire tubes and clean the flue passages', g: 'Burner' },
-  gascock:   { name: 'Open the main manual gas valve', g: 'Gas train', live: true },
+  electrode: { name: 'Ignitor assembly (Bishop pilot)', g: 'Burner' },
+  pilotv:    { name: 'Pilot solenoid valve V4046', g: 'Burner' },
+  pilotcock: { name: 'Open the pilot manual gas cock', g: 'Burner', live: true },
+  blower:    { name: 'Combustion blower motor (2 hp, 3 phase)', g: 'Burner' },
+  filter:    { name: 'Air filter (wash the foam pre-filter, replace the primary filter)', g: 'Burner' },
+  aps:       { name: 'Combustion airflow switch', g: 'Burner' },
+  apstube:   { name: 'Combustion airflow switch sensing tube', g: 'Burner' },
+  ratio:     { name: 'Adjust the SKP75 ratio (offset) to the firetest label', g: 'Burner', live: true },
+  hxclean:   { name: 'Clean the heat exchanger (fin tubes) and flue collector', g: 'Burner' },
+  gascock:   { name: 'Open the manual gas valves', g: 'Gas train', live: true },
   gasutil:   { name: 'Call the gas utility about low supply pressure', g: 'Gas train', live: true },
-  gasreg:    { name: 'Main gas pressure regulator', g: 'Gas train' },
-  lgps:      { name: 'Low gas pressure switch', g: 'Gas train' },
-  lgpsreset: { name: 'Press the reset button on the low gas pressure switch', g: 'Gas train', live: true, reset: 'lg' },
-  hgpsreset: { name: 'Press the reset button on the high gas pressure switch', g: 'Gas train', live: true, reset: 'hg' },
-  mainv1:    { name: 'Main gas valve V1 (actuator / coil)', g: 'Gas train' },
-  mainv2:    { name: 'Main gas valve V2 (actuator / coil)', g: 'Gas train' },
-  pump:      { name: 'Circulating pump motor', g: 'Water side' },
-  coupler:   { name: 'Pump coupler', g: 'Water side' },
+  skp75:     { name: 'SKP75 actuator / regulator (main valve, air/gas ratio)', g: 'Gas train' },
+  v2:        { name: 'Secondary gas valve (DB&B solenoid)', g: 'Gas train' },
+  vent:      { name: 'Normally open vent valve', g: 'Gas train' },
+  lgpsreset: { name: 'Reset the low gas pressure switch', g: 'Gas train', live: true, reset: 'lg' },
+  hgpsreset: { name: 'Reset the high gas pressure switch', g: 'Gas train', live: true, reset: 'hg' },
+  pump:      { name: 'System pump motor (5 hp)', g: 'Water side' },
+  coupler:   { name: 'System pump coupler', g: 'Water side' },
   isoopen:   { name: 'Open the pump isolation valves', g: 'Water side', live: true },
   purgeair:  { name: 'Purge air from the system (vents and purge valve)', g: 'Water side', live: true },
   strainer:  { name: 'Clean the pump suction strainer', g: 'Water side' },
-  flowsw:    { name: 'Flow switch', g: 'Water side' },
+  flowsw:    { name: 'Water flow switch FS4-3', g: 'Water side' },
   lwcoclean: { name: 'Clean the low-water cutoff probe', g: 'Water side' },
   fillopen:  { name: 'Open the make-up water valve and fill the system', g: 'Water side', live: true },
   exptank:   { name: 'Expansion tank (drain, recharge air to fill pressure)', g: 'Water side' },
@@ -456,52 +513,54 @@ const PARTS = {
   jmplwco:   { name: 'Remove jumper: low-water cutoff', g: 'Remove a jumper', jumper: true }
 };
 const FIXES = {
-  fuse_open: 'fuse', fuse_L1: 'pfuse', fuse_L2: 'pfuse', fuse_L3: 'pfuse', xfmr_open: 'xfmr', ps_coil: 'pstarter', m1_coil: 'm1', m1_pole: 'm1', oc_bad: 'oc', oc_stuck: 'oc', hl_bad: 'hl', rm_bad: 'rm', amp_bad: 'amp', scanner_bad: 'scanner',
-  lens_dirty: 'scanclean', ig_open: 'ignx', electrode: 'electrode', pv_open: 'pilotv', pilot_cock: 'pilotcock', blower_open: 'blower',
-  blower_dirty: 'blowclean', aps_bad: 'aps', aps_weld: 'aps', aps_tube: 'apstube', linkage: 'linkage', tubes_soot: 'tubes',
-  gas_closed: 'gascock', gas_low: 'gasutil', reg_high: 'gasreg', reg_low: 'gasreg', v1_open: 'mainv1', v2_open: 'mainv2',
-  pm_open: 'pump', coupler: 'coupler', iso_closed: 'isoopen', air_bound: 'purgeair', strainer: 'strainer', fs_bad: 'flowsw',
+  fuse_open: 'fuse', fuse_L1: 'pfuse', fuse_L2: 'pfuse', fuse_L3: 'pfuse', xfmr_open: 'xfmr', cb_bad: 'cb', bs_bad: 'bs',
+  oc_bad: 'rwf', rwf_sensor: 'sensor', sensor_low: 'sensor', hl_bad: 'hl', cra1_coil: 'cra1', vfd_bad: 'vfd', vf_open: 'vfuse',
+  ps_coil: 'pstarter', pm_open: 'pump', rm_bad: 'rm', amp_bad: 'amp', scanner_bad: 'scanner', lens_dirty: 'scanclean',
+  ig_open: 'ignx', electrode: 'electrode', pv_open: 'pilotv', pilot_cock: 'pilotcock', blower_open: 'blower', filter_dirty: 'filter',
+  aps_bad: 'aps', aps_weld: 'aps', aps_tube: 'apstube', ratio_lean: 'ratio', hx_soot: 'hxclean',
+  gas_closed: 'gascock', gas_low: 'gasutil', reg_high: 'skp75', v1_open: 'skp75', v2_open: 'v2', vent_open: 'vent',
+  coupler: 'coupler', iso_closed: 'isoopen', air_bound: 'purgeair', strainer: 'strainer', fs_bad: 'flowsw',
   lwco_dirty: 'lwcoclean', low_water: 'fillopen', tank_logged: 'exptank', relief_bad: 'relief', jmp_lwco: 'jmplwco'
 };
 const PART_GROUPS = ['Power and controls', 'Flame safeguard', 'Burner', 'Gas train', 'Water side', 'Remove a jumper'];
 
-/* what a tech finds when they look closely at a part (unit picture). Only the clicked part tells anything */
+/* what a tech finds when they look closely at a part (boiler room picture). Only the clicked part tells anything */
 function inspectText(k, B) {
   const f = B.faults, off = !B.disc;
   const T = {
-    burner: () => 'Burner head and blower housing. ' + (B.blowerRun ? 'The blower is running.' : 'The blower is stopped.'),
-    blower: () => B.blowerHum ? 'The blower motor hums loudly but the wheel does not turn. The motor is getting hot.' : !off ? 'Open the disconnect before you reach into the blower housing.' : f.has('blower_dirty') ? 'The blower wheel blades are packed with lint and dust, and the air inlet screen is matted over.' : 'The blower wheel is clean and spins freely by hand. The inlet screen is clear.',
-    damper: () => f.has('linkage') ? 'The air damper is much further open than the paint mark on the shaft. The linkage set screw is loose.' : 'The air damper lines up with the paint mark on its shaft. The linkage is tight.',
-    aps: () => f.has('aps_tube') ? 'The sensing tube from the blower housing to the switch is cracked through at a tight bend.' : 'The sensing tube is soft and whole, pushed fully on both barbs. Setpoint 0.5 in. w.c.',
-    sight: () => B.main ? 'Through the sight glass: a steady main flame' + (f.has('linkage') ? ', short and lifting off the burner head, very blue.' : f.has('blower_dirty') ? ', long, lazy and yellow-tipped.' : ', blue with a firm shape.') : B.pilot ? 'Through the sight glass: a pilot flame.' : B.spark ? 'Through the sight glass: a spark snapping at the pilot, but no flame.' : 'Through the sight glass: dark.',
-    scanner: () => !off ? 'Open the disconnect before you pull the scanner.' : f.has('lens_dirty') ? 'The scanner lens and sight tube are coated with a grey-brown film.' : 'The scanner lens is clear and the sight tube is clean.',
-    electrode: () => !off ? 'Open the disconnect before you pull the pilot assembly.' : f.has('electrode') ? 'The electrode porcelain has a hairline crack, with a black carbon track across it.' : 'The electrode porcelain is clean and whole. Gap is about 1/8 inch.',
-    ignx: () => 'Ignition transformer, 120 V primary, 6,000 V secondary.' + (B.en.ig ? ' It is buzzing.' : ''),
-    pilotcock: () => f.has('pilot_cock') ? 'The pilot gas cock handle is across the pipe.' : 'The pilot gas cock handle is in line with the pipe.',
-    gascock: () => f.has('gas_closed') ? 'The main manual gas valve handle is across the pipe.' : 'The main manual gas valve handle is in line with the pipe.',
-    lgps: () => 'Low gas pressure switch, set at 3.5 in. w.c., manual reset. ' + (B.lgTrip ? 'The reset button is popped out.' : 'The reset button is in.'),
-    hgps: () => 'High gas pressure switch, set at 5.0 in. w.c., manual reset. ' + (B.hgTrip ? 'The reset button is popped out.' : 'The reset button is in.'),
-    reg: () => 'Main gas pressure regulator. The vent is clear.',
-    v1: () => 'Main gas valve V1 actuator. ' + (B.en.v1 ? 'The OPEN indicator shows.' : 'The indicator shows CLOSED.'),
-    v2: () => 'Main gas valve V2 actuator. ' + (B.en.v2 ? 'The OPEN indicator shows.' : 'The indicator shows CLOSED.'),
-    pv: () => 'Pilot solenoid valve. ' + (B.en.pv ? 'It is warm and humming.' : 'It is quiet.'),
-    pump: () => B.pumpRun ? (f.has('coupler') ? 'The pump motor is running. The coupler guard is warm. Through the guard slots the motor shaft spins but the pump shaft does not.' : f.has('air_bound') ? 'The pump is running and you can hear gravel-like rattling in the volute.' : 'The pump is running smoothly.') : B.pumpHum ? 'The pump motor hums but does not turn. Hot to the touch.' : 'The pump is stopped.',
+    burner: () => 'Premix burner and mixer behind the vestibule panel. ' + (B.blowerRun ? 'The blower is running.' : 'The blower is stopped.'),
+    blower: () => !off ? 'Open the disconnect before you reach in behind the air filter.' : 'The blower wheel spins freely by hand. ' + (f.has('blower_open') ? 'The motor junction box smells burnt.' : 'No odor at the motor.'),
+    vfd: () => 'Variable frequency drive keypad: ' + (B.vfdText() || '(dark)') + '.',
+    filter: () => (B.status().filterLamp ? 'The CHANGE FILTER light on the burner switch panel is on. ' : '') + (off && f.has('filter_dirty') ? 'With the filter out: the foam pre-filter is matted grey with lint and the primary filter is caked.' : off ? 'With the filter out: the foam pre-filter and primary filter are clean.' : 'Air filter on top of the blower inlet. Take it out with the power off to look at it.'),
+    aps: () => f.has('aps_tube') ? 'The red sensing tube to the combustion airflow switch is cracked through where it bends.' : 'The sensing tubes are soft and whole, pushed fully on both barbs.',
+    sight: () => B.main ? 'Through the observation port: the burner element ' + (f.has('ratio_lean') ? 'is patchy and dull, with dark spots that come and go.' : f.has('filter_dirty') ? 'glows bright orange-red with streaks and some lazy yellow flame tips.' : 'glows evenly orange without flickering.') : B.pilot ? 'Through the observation port: a blue pilot flame.' : B.spark ? 'Through the observation port: a spark snapping at the pilot, but no flame.' : 'Through the observation port: dark.',
+    scanner: () => !off ? 'Open the disconnect before you pull the scanner.' : f.has('lens_dirty') ? 'The UV scanner lens is filmed over and the scanner tube is partly blocked with debris.' : 'The UV scanner lens is clear and the scanner tube is open.',
+    electrode: () => !off ? 'Open the disconnect before you pull the pilot assembly.' : f.has('electrode') ? 'The ignitor porcelain has a hairline crack with a carbon track across it.' : 'The ignitor porcelain is clean and whole, gap correct.',
+    ignx: () => 'Ignition transformer, 120 V primary.' + (B.en.ig ? ' It is buzzing.' : ''),
+    pilotcock: () => f.has('pilot_cock') ? 'The pilot manual gas cock handle is across the pipe.' : 'The pilot manual gas cock handle is in line with the pipe.',
+    gascock: () => f.has('gas_closed') ? 'The handle of the manual gas valve at the gas train inlet is across the pipe.' : 'Both manual gas valves have their handles in line with the pipe.',
+    lgps: () => 'Low gas pressure switch, manual reset. ' + (B.lgTrip ? 'It is in the tripped position.' : 'It is reset.'),
+    hgps: () => 'High gas pressure switch, manual reset. ' + (B.hgTrip ? 'It is in the tripped position.' : 'It is reset.'),
+    v1: () => 'Main valve body with the Siemens SKP75 actuator / air-gas ratio regulator. ' + (B.en.v1 ? 'The position indicator shows OPEN.' : 'The position indicator shows CLOSED.'),
+    v2: () => 'Secondary gas valve (DB&B solenoid). ' + (B.en.v2 ? 'It is warm and humming.' : 'It is quiet.'),
+    vent: () => 'Normally open vent valve between the two main valves, piped outdoors. ' + (f.has('vent_open') && B.en.vv ? 'You can hear gas hissing through it.' : 'Quiet.'),
+    pv: () => 'Pilot solenoid valve V4046. ' + (B.en.pv ? 'It is warm and humming.' : 'It is quiet.'),
+    pump: () => B.pumpRun ? (f.has('coupler') ? 'The system pump motor is running. Through the coupler guard the motor shaft spins but the pump shaft does not.' : f.has('air_bound') ? 'The system pump is running and you can hear gravel-like rattling in the volute.' : 'The system pump is running smoothly.') : B.pumpHum ? 'The system pump motor hums but does not turn. Hot to the touch.' : 'The system pump is stopped.',
     coupler: () => !off ? 'Open the disconnect before you take the coupler guard off.' : f.has('coupler') ? 'With the guard off: the rubber coupler insert is shredded. The motor half spins free.' : 'With the guard off: the coupler is whole and tight.',
-    iso: () => f.has('iso_closed') ? 'The suction isolation valve handle is across the pipe.' : 'Both pump isolation valves have their handles in line with the pipe.',
+    iso: () => f.has('iso_closed') ? 'The pump suction isolation valve handle is across the pipe.' : 'Both pump isolation valves have their handles in line with the pipe.',
     strainer: () => 'Y-strainer on the pump suction. ' + (off && f.has('strainer') ? 'With the cap off: the basket is packed with scale and debris.' : off ? 'With the cap off: the basket is clean.' : 'Isolate and shut off the pump before you open it.'),
-    fs: () => 'Paddle flow switch on the supply pipe. Closes at about 20 gpm.',
+    fs: () => 'Paddle water flow switch FS4-3 on the boiler supply pipe.',
     lwco: () => (B.status().lwLamp ? 'The LOW WATER light is on. ' : 'The LOW WATER light is off. ') + (off && f.has('lwco_dirty') ? 'With the probe pulled: it is thick with scale and sludge.' : off ? 'With the probe pulled: it is clean.' : 'Probe-type low-water cutoff.'),
     gauge: () => 'Boiler pressure/temperature gauge: ' + B.P.toFixed(0) + ' psi, ' + Math.round(B.Tb) + '°F.',
-    relief: () => 'Pressure relief valve, set at 30 psi. ' + (B.relief === 'discharging' ? 'Water is pouring out of the discharge pipe onto the floor.' : B.relief === 'dripping' ? 'The discharge pipe is dripping steadily.' : 'The discharge pipe is dry.'),
+    relief: () => 'Pressure relief valve, set at ' + RELIEF + ' psi. ' + (B.relief === 'discharging' ? 'Water is pouring out of the discharge pipe onto the floor.' : B.relief === 'dripping' ? 'The discharge pipe is dripping steadily.' : 'The discharge pipe is dry.'),
     exptank: () => off && f.has('tank_logged') ? 'Tapped along its side, the tank sounds full of water top to bottom. A drop of water comes out of the air valve.' : off ? 'Tapped along its side, the top half sounds hollow. The air valve gives air.' : 'Diaphragm expansion tank. Tap it or check the air charge with the system pressure off it.',
-    fill: () => f.has('low_water') ? 'The make-up water valve is closed. The pressure-reducing fill valve is set at 12 psi.' : 'The make-up water valve is open. The pressure-reducing fill valve is set at 12 psi.',
-    vent: () => 'Automatic air vent on the air separator. ' + (f.has('air_bound') ? 'It hisses air when you push the cap.' : 'Quiet.'),
+    fill: () => f.has('low_water') ? 'The make-up water valve is closed. The pressure-reducing fill valve is set at 15 psi.' : 'The make-up water valve is open. The pressure-reducing fill valve is set at 15 psi.',
+    vent2: () => 'Automatic air vent on the air separator. ' + (f.has('air_bound') ? 'It hisses air when you push the cap.' : 'Quiet.'),
     stack: () => 'Flue outlet and the analyzer test port.',
-    tubes: () => !off ? 'Open the disconnect before you open the boiler door.' : f.has('tubes_soot') ? 'With the rear door open: the fire tubes are lined with soft black soot.' : 'With the rear door open: the fire tubes are clean.',
-    olr: () => 'Pump overload relay, manual reset. ' + (B.olTrip ? 'The trip flag is showing.' : 'The trip flag is not showing.'),
-    rm: () => 'Flame safeguard relay module with keyboard display. ' + (B.rmOK() ? '' : 'The display and all LEDs are dark.'),
+    tubes: () => !off ? 'Open the disconnect before you open up the heat exchanger.' : f.has('hx_soot') ? 'With the flue collector off: the copper fins are coated with black soot and partly bridged.' : 'With the flue collector off: the copper fins are clean.',
+    rm: () => 'Control panel behind the upper front jacket: RM7896D, RWF55, VFD and terminal strip. ' + (B.rmOK() ? '' : 'The RM7896D display and all LEDs are dark.'),
     alarm: () => B.en.alarm ? 'The red alarm light is on.' : 'The alarm light is off.',
-    jumper: () => f.has('jmp_lwco') ? 'In the control cabinet, a short wire jumper is screwed across the two low-water cutoff terminals.' : 'No jumpers on the safety terminals.'
+    jumper: () => f.has('jmp_lwco') ? 'In the control panel, a short wire jumper is screwed across the two low-water cutoff terminals.' : 'No jumpers on the safety terminals.'
   };
   return T[k] ? T[k]() : '';
 }
@@ -835,66 +894,59 @@ const PT = {
 };
 
 /* ---- levels.js ---- */
-/* ===== Twenty-two service calls, from the basics to compound faults. Tickets are in the customer's words and never name the part.
+/* ===== Twenty-two service calls on a Thermal Solutions EVA-3000, from the basics to compound faults. Tickets are in the
+   customer's words and never name the part.
    cust: answers to the questions in "Talk to the customer". pre: seconds the boiler ran before you arrived. resets: times the
    customer already pushed the reset button. ===== */
 const LEVELS = [
-  { id: 1, title: 'Dead quiet', site: 'Bldg 114, Motor Pool office', faults: ['fuse_open'], par: 6,
-    ticket: 'Nothing is running in the boiler room. No lights on the boiler, no hum, nothing. The offices are getting cold.',
-    cust: { when: 'Sometime overnight. It was fine at close of business.', work: 'Nobody has touched it in months.', lights: 'No lights at all on the burner panel. Usually there is a green one.', noise: 'It is completely silent in there.' },
-    hints: ['Start at the disconnect. Is there 120 V on the line side and the load side?', 'Follow L1 into the panel. Read across the control fuse with the power on.', 'Voltage across a fuse with the power on means the fuse is open. Confirm with ohms, power off.'] },
+  { id: 1, title: 'Dead quiet', site: 'Bldg 114, Motor Pool office', faults: ['fuse_open'], par: 7,
+    ticket: 'Nothing is running in the boiler room. No lights on the boiler, the pump is off, nothing. The offices are getting cold.',
+    cust: { when: 'Sometime overnight. It was fine at close of business.', work: 'Nobody has touched it in months.', lights: 'No lights at all. The burner switch light is out and the little screen is dark.', noise: 'It is completely silent in there.' },
+    hints: ['Start at the disconnect. Is there 208 V on all three legs?', 'Follow L1 and L2 to the control transformer. Read across its two primary fuses with the power on.', 'Voltage across a fuse with the power on means it is open. An ohm reading with the fuse still in the holder goes back through the transformer and the drive, so pull it to ohm it.'] },
   { id: 2, title: 'Pump will not start', site: 'Bldg 207, Dental Clinic', faults: ['ps_coil'], par: 8,
-    ticket: 'The boiler is not firing and the pipes in the mechanical room are cold. The building controls show heat is on.',
-    cust: { when: 'This morning. The front desk noticed the cold first.', work: 'No work done.', lights: 'The burner display just says STANDBY.', noise: 'Very quiet. Usually you can hear the pump.' },
-    hints: ['The burner waits for the flow switch, and the flow switch waits for the pump. Is the pump running?', 'Check for 120 V across the pump starter coil (A to B), then 208 V on its line and load sides.', 'Coil has 120 V across it but the starter never pulls in: ohm the coil with the power off.'] },
+    ticket: 'The boiler is not firing and the pipes in the mechanical room are cold. The pump is not running.',
+    cust: { when: 'This morning. The front desk noticed the cold first.', work: 'No work done.', lights: 'The burner screen just says STANDBY.', noise: 'Very quiet. Usually you can hear the pump.' },
+    hints: ['The burner waits for the flow switch, and the flow switch waits for the pump. Is the pump running?', 'The system pump starter coil is fed from TB3 through its overload. Check 115 V across the coil, A to B.', 'Coil has 115 V across it but the starter never pulls in: ohm the coil with the power off (open the overload contact or lift a wire to isolate it).'] },
   { id: 3, title: 'Pump runs, burner waits', site: 'Bldg 31, Chapel annex', faults: ['oc_bad'], par: 8,
-    ticket: 'The pump is running but the boiler never lights. The water gauge says it is barely warm.',
-    cust: { when: 'Two days ago it started taking longer to warm up, then today it just stopped heating.', work: 'Nobody has been in there.', lights: 'The screen on the burner says STANDBY.', noise: 'Just the pump.' },
-    hints: ['In STANDBY the relay module is waiting for terminal 6. Measure terminal 6 to neutral.', 'Walk the limit string from the burner switch to terminal 6. Where does the 120 V stop?', 'The water is far below the 180°F setpoint, so the operating control should be closed.'] },
-  { id: 4, title: 'Red light after the gas work', site: 'Bldg 9, Headquarters', faults: ['gas_closed'], par: 7, resets: 1,
-    ticket: 'The gas company was working on the meter yesterday. Now the boiler has a red light on and will not stay on. We pushed the reset once.',
-    cust: { when: 'Since the gas crew left yesterday afternoon.', work: 'The gas company swapped the building meter.', lights: 'A red alarm light, and the screen says LOCKOUT.', noise: 'The fan ran for a little while after we pushed reset, then it stopped again.' },
-    hints: ['Read the lockout message on the keyboard display. What does it name?', 'The lockout interlock string runs through the gas pressure switches and the air switch. Find where 120 V stops between terminal 6 and terminal 7.', 'Put the manometer on the gas inlet port. What is the supply pressure?'] },
-  { id: 5, title: 'Click, click, no fire', site: 'Bldg 52, Barracks B', faults: ['ig_open'], par: 9, resets: 1,
+    ticket: 'The pump is running but the boiler never lights. The gauge says the water is barely warm.',
+    cust: { when: 'Two days ago it started taking longer to warm up, then today it just stopped heating.', work: 'Nobody has been in there.', lights: 'The burner screen says STANDBY. The temperature controller shows the water temperature.', noise: 'Just the pump.' },
+    hints: ['In STANDBY the RM7896D is waiting for 115 V on terminal 6. Check terminals 4, 5 and 6 like the manual\'s troubleshooting guide.', 'Walk the limit string from TB5: high limit, operating switch (RWF55 Q13-Q14), gas switches, flow switch, low water, vestibule fuse switch.', 'The water is far below setpoint, so the RWF55 operating switch should be closed.'] },
+  { id: 4, title: 'Will not start after the gas work', site: 'Bldg 9, Headquarters', faults: ['gas_closed'], par: 8,
+    ticket: 'The gas company was working on the meter yesterday. Since then the boiler will not start. No alarm light.',
+    cust: { when: 'Since the gas crew left yesterday afternoon.', work: 'The gas company swapped the building meter.', lights: 'No alarm. The screen says STANDBY.', noise: 'Just the pump running.' },
+    hints: ['STANDBY with the water cold: find where 115 V stops between TB5 and terminal 6.', 'On this boiler the gas pressure switches are in the limit string, so they hold the burner off without a lockout.', 'Put the manometer on the gas inlet port. What is the supply pressure? The switch will not reset until the pressure is back.'] },
+  { id: 5, title: 'Fan runs, no fire', site: 'Bldg 52, Barracks B', faults: ['ig_open'], par: 9, resets: 1,
     ticket: 'The boiler starts its fan, waits, then gives up with an alarm. Showers are lukewarm.',
-    cust: { when: 'Early this morning.', work: 'Nothing.', lights: 'Red alarm light. The screen says something about pilot.', noise: 'The fan runs for a while, then nothing.' },
-    hints: ['Reset and watch the sequence. During pilot ignition, look through the sight glass. Is there a spark?', 'During PFEP, read terminal 10 to neutral and across the ignition transformer primary.', '120 V across the primary and no spark: ohm the primary with the power off.'] },
+    cust: { when: 'Early this morning.', work: 'Nothing.', lights: 'Red alarm light. The screen says something about pilot.', noise: 'The fan runs for a while, then winds down.' },
+    hints: ['Reset and watch the sequence. During the first 5 seconds of pilot ignition, look through the observation port. Is there a spark?', 'During the first 5 seconds of PFEP, read terminal 10 (TB10) to neutral and across the ignition transformer.', '115 V across the transformer and no spark: ohm it with the power off.'] },
   { id: 6, title: 'Spark but no pilot', site: 'Bldg 52, Barracks C', faults: ['pv_open'], par: 9, resets: 2,
     ticket: 'Same as the other barracks last week: alarm light, no heat. Our building manager pushed reset twice.',
-    cust: { when: 'Last night.', work: 'No one has worked on it.', lights: 'Red light, the display says pilot flame fail.', noise: 'You can hear a ticking during start, then it stops.' },
-    hints: ['During pilot ignition there is a spark but no flame. Is gas getting to the pilot? Check the pilot pressure.', 'Read terminal 8 to neutral during PFEP, and across the pilot valve coil.', '120 V at the pilot valve and no pilot gas: ohm the coil.'] },
+    cust: { when: 'Last night.', work: 'No one has worked on it.', lights: 'Red light, the screen says pilot flame fail.', noise: 'You can hear a ticking during start, then it stops.' },
+    hints: ['During pilot ignition there is a spark but no flame. Is gas getting to the pilot? Check the pilot pressure.', 'Read terminal 8 (TB8) to neutral during PFEP, and across the V4046 pilot valve.', '115 V at the pilot valve and no pilot gas: ohm the coil.'] },
   { id: 7, title: 'Flame you can see', site: 'Bldg 340, Gym', faults: ['lens_dirty'], par: 8, resets: 1,
-    ticket: 'The boiler tries to light and you can actually see a little flame through the window, but then it shuts off and alarms.',
+    ticket: 'The boiler tries to light and you can actually see a little blue flame through the window, but then it shuts off and alarms.',
     cust: { when: 'It has done it on and off for a week, now every time.', work: 'Nothing.', lights: 'Red alarm. The screen says pilot flame fail.', noise: 'Normal start-up noises, then it shuts off.' },
-    hints: ['A flame is there but the relay module does not believe it. What does the flame signal read in DC volts?', 'Normal pilot signal is 2 V dc or more. Minimum to prove flame is 1.25 V.', 'Low signal with a good flame: look at what the scanner looks through.'] },
+    hints: ['A flame is there but the RM7896D does not believe it. What does the flame signal read in DC volts?', 'The manual wants 1.5 to 5.0 V dc. Below that, check whether the pilot is big enough, then the scanner.', 'Good pilot, low signal: the manual says check for a blocked scanner tube, then the scanner, then the amplifier card.'] },
   { id: 8, title: 'Fan runs, no prove', site: 'Bldg 18, Supply warehouse', faults: ['aps_bad'], par: 8, resets: 1,
     ticket: 'The boiler fan comes on and then it alarms within a few seconds. No heat in the warehouse office.',
-    cust: { when: 'This morning.', work: 'No.', lights: 'Red light. Display says lockout something interlock.', noise: 'Fan runs, then quits.' },
-    hints: ['The lockout says the interlock did not prove in prepurge. Which switches are in that string?', 'With the blower running, read the blower static pressure at the air switch port.', 'Good air pressure at the switch, but 120 V across its contacts with the blower running.'] },
+    cust: { when: 'This morning.', work: 'No.', lights: 'Red light. The screen says lockout, something about airflow.', noise: 'Fan runs, then quits.' },
+    hints: ['The lockout says the interlock did not prove in prepurge. On this boiler that is the combustion airflow switch, TB6 to TB7.', 'With the blower running, read the static pressure at the airflow switch port.', 'Good air pressure at the switch, but 115 V across its contacts with the blower running.'] },
   { id: 9, title: 'Hot smell from the burner', site: 'Bldg 405, Clinic', faults: ['blower_open'], par: 9, resets: 1,
-    ticket: 'There was a hot electrical smell near the burner and now it has an alarm light. We did not touch anything else.',
-    cust: { when: 'Around noon.', work: 'No work done.', lights: 'Red alarm light.', noise: 'It was humming loud before it quit. Now it is quiet.' },
-    hints: ['During prepurge, is the blower turning? Listen to it.', 'With M1 pulled in, read 208 V across each pair of blower motor leads (T1-T2, T2-T3, T3-T1).', 'All three legs are there and the motor only hums: ohm each pair of windings with the power off. They should all match.'] },
-  { id: 21, title: 'Fan never comes on', site: 'Bldg 66, Vehicle maintenance', faults: ['m1_coil'], par: 9, resets: 1,
-    ticket: 'The boiler clicks, waits a bit and then the red alarm light comes on. We never hear the burner fan.',
-    cust: { when: 'This morning.', work: 'No.', lights: 'Red alarm light. The screen says lockout, something about interlock.', noise: 'A click from the panel, then nothing. No fan.' },
-    hints: ['During prepurge the relay module sends 120 V out of terminal 3 to start the blower. Does it get there?', 'Read across the M1 coil, A to B, during prepurge. Does the contactor pull in?', '120 V on the coil and the contactor never pulls in: ohm the coil with the power off.'] },
+    ticket: 'There was a hot electrical smell near the boiler and now it has an alarm light. We did not touch anything else.',
+    cust: { when: 'Around noon.', work: 'No work done.', lights: 'Red alarm light, and the small drive screen inside says fault.', noise: 'It made a whine and then quit. Now it is quiet.' },
+    hints: ['During prepurge, is the blower turning? Look at the VFD keypad.', 'The drive trips on output phase loss. Check the drive output and the motor leads U, V and W.', 'With the power off, ohm the motor leads U-V, V-W and W-U. They should all match.'] },
   { id: 10, title: 'Pilot lights, main does not', site: 'Bldg 77, Dining facility', faults: ['v1_open'], par: 10, resets: 1,
     ticket: 'The boiler lights a little flame, then shuts down with an alarm. The kitchen needs hot water for the noon meal.',
     cust: { when: 'Since breakfast.', work: 'No.', lights: 'Red alarm. Something about main flame.', noise: 'A puff of a start, then it goes off.' },
-    hints: ['The pilot proves. The main flame never lights. What does the main gas valve need?', 'During MFEP read terminal 9 to neutral, then across each main valve coil.', 'Both valves are in series in the gas line: if one does not open, no gas reaches the burner. Isolate each coil before you ohm it.'] },
+    hints: ['The pilot proves. The main flame never lights. What do the main valves need?', 'During MFEP read terminal 9 (TB9) to neutral, then across the SKP75 actuator and the secondary valve. Watch the SKP75 position indicator.', 'TB9 also feeds the vent valve and TD-1, so a coil reads in parallel with them. Lift a wire to ohm one device.'] },
   { id: 11, title: 'After the leak repair', site: 'Bldg 2, Family housing office', faults: ['low_water'], par: 6,
     ticket: 'A plumber fixed a leaking radiator valve upstairs yesterday. Today there is no heat at all.',
     cust: { when: 'This morning.', work: 'A plumber drained down part of the system and fixed a valve on the second floor.', lights: 'There is a light that says LOW WATER on a box on the side of the boiler.', noise: 'The pump is running.' },
-    hints: ['What is the boiler pressure gauge reading? Cold fill is about 12 psi.', 'A probe-type low-water cutoff opens the limit string when the water drops below its probe.', 'After water is drained, it has to be put back.'] },
+    hints: ['What is the boiler pressure gauge reading? Cold fill is about 15 psi.', 'A probe-type low-water cutoff opens the limit string when the water drops below its probe.', 'After water is drained, it has to be put back.'] },
   { id: 12, title: 'Low water, full boiler', site: 'Bldg 60, Fire station', faults: ['lwco_dirty'], par: 8,
     ticket: 'The boiler says low water, but the pressure gauge looks normal. We added water anyway and nothing changed.',
     cust: { when: 'Yesterday.', work: 'We opened the water feed for a minute. The gauge went a little higher.', lights: 'LOW WATER light on.', noise: 'Pump runs. Burner never starts.' },
     hints: ['Is the boiler really low? Check the pressure gauge against the cold fill pressure.', 'Measure across the low-water cutoff contacts.', 'A probe senses water by conducting through it. What happens when it is coated?'] },
-  { id: 22, title: 'Pump keeps tripping', site: 'Bldg 12, Transportation office', faults: ['fuse_L3'], par: 10, pre: 200,
-    ticket: 'The pump stopped and there is no heat. Our maintenance guy pushed a reset button on the pump starter and it hummed and stopped again.',
-    cust: { when: 'After a thunderstorm last night.', work: 'Our maintenance guy pushed the reset on the pump starter this morning.', lights: 'Screen says STANDBY.', noise: 'When he reset it the pump just hummed loud for a few seconds, then clicked off.' },
-    hints: ['A 3-phase motor that hums and will not turn is usually missing a leg. Check all three legs.', 'Read L1-L2, L2-L3 and L3-L1 at the line side of the disconnect, then after each fuse.', 'One leg reads about half voltage after its fuse: that is back-feed through the motor windings, not real power. Ohm the fuse with the power off. Then reset the overload.'] },
   { id: 13, title: 'Pump hums along, no heat', site: 'Bldg 115, Training center', faults: ['coupler'], par: 9,
     ticket: 'We hear the pump motor running, but the boiler will not fire and the building is cold.',
     cust: { when: 'This morning after the weekend.', work: 'No.', lights: 'Screen says STANDBY.', noise: 'The pump sounds louder than normal. Kind of a rattle.' },
@@ -911,61 +963,74 @@ const LEVELS = [
     ticket: 'There is water on the boiler room floor every morning. The boiler seems to heat fine.',
     cust: { when: 'Over the last two weeks, getting worse.', work: 'No work.', lights: 'No alarm lights.', noise: 'Sometimes a hiss and a splash.' },
     hints: ['Watch the pressure gauge as the water heats up.', 'Normal system pressure rises only a few psi from cold to 180°F. This one climbs to the relief setting.', 'What in the system takes up the water as it expands?'] },
-  { id: 17, title: 'Too hot, then nothing', site: 'Bldg 41, Medical logistics', faults: ['oc_stuck'], par: 10, pre: 300,
+  { id: 17, title: 'Too hot, then nothing', site: 'Bldg 41, Medical logistics', faults: ['sensor_low'], par: 10, pre: 300,
     ticket: 'Yesterday the radiators were too hot to touch. Today the boiler is off and the building is cooling down.',
-    cust: { when: 'It got very hot yesterday afternoon, then off this morning.', work: 'No.', lights: 'The burner display says STANDBY.', noise: 'Some banging in the pipes yesterday when it was hot.' },
-    hints: ['Walk the limit string. Which control has opened?', 'A manual reset high limit only trips when the water gets too hot. Why did it get that hot?', 'The operating control should have stopped the burner at 180°F. Watch it after you reset the high limit.'] },
-  { id: 18, title: 'Trips while running', site: 'Bldg 9, Headquarters', faults: ['reg_high'], par: 10, resets: 1,
-    ticket: 'The boiler starts, runs for a few seconds and then shuts down with an alarm. The gas company says our supply is fine.',
-    cust: { when: 'Since yesterday.', work: 'No.', lights: 'Red light. Lockout.', noise: 'It lights with a louder roar than usual, then shuts off.' },
-    hints: ['Read the lockout history. When in the sequence does it trip?', 'Check the gas pressure switches. One has a popped reset button.', 'Put the manometer on the manifold port during a start. What should manifold pressure be?'] },
-  { id: 19, title: 'Exhaust smell', site: 'Bldg 500, Child development center', faults: ['blower_dirty'], par: 8,
-    ticket: 'Staff noticed an exhaust smell near the boiler room door and the boiler window is getting dark. The heat is working.',
-    cust: { when: 'The smell started this week.', work: 'Nobody has cleaned anything in there for a long time.', lights: 'No alarm.', noise: 'Sounds normal.' },
-    hints: ['The boiler runs. This job is about combustion. Use the analyzer in the stack.', 'Low O2 and high CO mean not enough air for the gas.', 'Check the blower static pressure, then look at what moves the air.'] },
+    cust: { when: 'It got very hot yesterday afternoon, then off this morning.', work: 'No.', lights: 'The burner screen says STANDBY.', noise: 'Some banging in the pipes yesterday when it was hot.' },
+    hints: ['Walk the limit string. Which control has opened?', 'The L4008E manual reset high limit only trips when the water gets too hot. Why did it get that hot?', 'Compare the temperature on the RWF55 display with the boiler P/T gauge and a pipe thermometer on the supply. Does the controller see the real water temperature?'] },
+  { id: 18, title: 'Runs a minute, then quits', site: 'Bldg 9, Headquarters', faults: ['reg_high'], par: 10, pre: 200,
+    ticket: 'The boiler starts and runs for a minute or so, then shuts off and will not come back on. There is no alarm light.',
+    cust: { when: 'Since yesterday.', work: 'No.', lights: 'No alarm. The screen says STANDBY.', noise: 'It gets louder just before it shuts off.' },
+    hints: ['STANDBY, no alarm: something in the limit string opened. Find where 115 V stops before terminal 6.', 'One of the gas pressure switches is tripped. When in the firing cycle did it trip?', 'Put the manometer on the port after the main valves and watch it as the burner ramps up to high fire. Compare with the firetest label.'] },
+  { id: 19, title: 'Exhaust smell', site: 'Bldg 500, Child development center', faults: ['filter_dirty'], par: 8,
+    ticket: 'Staff noticed an exhaust smell near the boiler room door. The heat is working, and there is a light on the front of the boiler we do not usually see.',
+    cust: { when: 'The smell started this week.', work: 'Nobody has done maintenance on it in a long time.', lights: 'A light next to the burner switch is on. No red alarm.', noise: 'Sounds normal.' },
+    hints: ['The boiler runs. This job is about combustion. Use the analyzer in the stack.', 'Low O2 and high CO mean not enough air for the gas.', 'Check the combustion air static pressure, then look at what the blower breathes through.'] },
   { id: 20, title: 'Someone got it running', site: 'Bldg 8, Old armory', faults: ['jmp_lwco', 'low_water'], par: 10,
     ticket: 'Another company came out last night and got the boiler going. Now it is making loud banging and kettle noises.',
     cust: { when: 'The noise started this morning.', work: 'Another contractor came out last night. He said he got it running and would come back for parts.', lights: 'There is a LOW WATER light on, but the boiler is running anyway.', noise: 'Banging and rumbling like a kettle.' },
-    hints: ['The LOW WATER light is on but the burner runs. How can that be?', 'Look at the low-water cutoff terminals in the cabinet.', 'Never leave a safety jumped. Fix the reason it tripped, then remove the jumper.'] }
+    hints: ['The LOW WATER light is on but the burner runs. How can that be?', 'Look at the low-water cutoff terminals in the control panel.', 'Never leave a safety jumped. Fix the reason it tripped, then remove the jumper.'] },
+  { id: 21, title: 'Fan never comes on', site: 'Bldg 66, Vehicle maintenance', faults: ['cra1_coil'], par: 9, resets: 1,
+    ticket: 'The boiler clicks, waits a bit and then the red alarm light comes on. We never hear the burner fan.',
+    cust: { when: 'This morning.', work: 'No.', lights: 'Red alarm light. The screen says lockout, something about airflow.', noise: 'A click from the panel, then nothing. No fan.' },
+    hints: ['During prepurge the RM7896D puts 115 V out of terminal 4 to start the blower. Where does it go? (TB11.)', 'The VFD only runs when relay CRA1 gives it the run command. Read across the CRA1 coil during prepurge. Does it pull in?', '115 V on the coil and the relay never pulls in: ohm the coil with the power off.'] },
+  { id: 22, title: 'Pump keeps tripping', site: 'Bldg 12, Transportation office', faults: ['fuse_L3'], par: 10, pre: 200,
+    ticket: 'The pump stopped and there is no heat. Our maintenance guy pushed a reset button on the pump starter and it hummed and stopped again.',
+    cust: { when: 'After a thunderstorm last night.', work: 'Our maintenance guy pushed the reset on the pump starter this morning.', lights: 'Screen says STANDBY.', noise: 'When he reset it the pump just hummed loud for a few seconds, then clicked off.' },
+    hints: ['A 3-phase motor that hums and will not turn is usually missing a leg. Check all three legs.', 'Read L1-L2, L2-L3 and L3-L1 at the line side of the disconnect, then after each fuse.', 'One leg reads about half voltage after its fuse: that is back-feed through the motor windings, not real power. Ohm the fuse with the power off. Then reset the overload.'] }
 ];
 LEVELS.forEach((l, i) => { l.n = i + 1; l.rank = l.n <= 5 ? 'Apprentice' : l.n <= 15 ? 'Journeyman' : 'Senior tech'; });
 
 /* ---- panel.js ---- */
-/* ===== Boiler control panel: every probe point the meter can touch, drawn with the same part artwork (ptdraw.js) as the
-   package unit game. Art goes behind; brass lugs sit under every terminal dot; wires (toggle) on top of the art. ===== */
-const PANEL_W = 1120, PANEL_H = 2110;
+/* ===== EVA-3000 control panel: every probe point the meter can touch, laid out like the boiler's control panel and drawn
+   with the same part artwork (ptdraw.js) as the package unit game. Art goes behind; brass lugs sit under every terminal
+   dot; wires (toggle) on top of the art. Terminal numbers follow Figure 9c of the EVA manual. ===== */
+const PANEL_W = 1120, PANEL_H = 2420;
 let TPOS = {};
-const NAV = [['Power', 0], ['Motor starters', 360], ['Limit string', 1075], ['Interlocks', 1285], ['Flame safeguard', 1495], ['Burner loads', 1875]];
+const NAV = [['Power', 0], ['Blower and switches', 360], ['Terminal strip', 700], ['Limit string', 840], ['RM7896D', 1240], ['Relays', 1600], ['Burner loads', 1800], ['System pump', 2010]];
 const TLBL = {
   LN_L1: 'L1', LN_L2: 'L2', LN_L3: 'L3', F1_IN: 'F1', F2_IN: 'F2', F3_IN: 'F3', F1_OUT: 'F1', F2_OUT: 'F2', F3_OUT: 'F3',
-  XF_H1: 'H1', XF_H2: 'H2', XF_X1: 'X1', XF_X2: 'X2', FU_IN: 'IN', FU_OUT: 'OUT', NB: 'N', GND: 'GND',
-  M1_L1: 'L1', M1_L2: 'L2', M1_L3: 'L3', M1_T1: 'T1', M1_T2: 'T2', M1_T3: 'T3', M1_A: 'A', M1_B: 'B',
-  BM_T1: 'T1', BM_T2: 'T2', BM_T3: 'T3', PS_L1: 'L1', PS_L2: 'L2', PS_L3: 'L3', PS_T1: 'T1', PS_T2: 'T2', PS_T3: 'T3', PS_A: 'A', PS_B: 'B',
-  OL_95: '95', OL_96: '96', PM_T1: 'T1', PM_T2: 'T2', PM_T3: 'T3', EN_1: '1', EN_2: '2', AL_1: '1', AL_2: '2', BS_1: '1', BS_2: '2',
-  OC_1: '1', OC_2: '2', HL_1: '1', HL_2: '2', LW_1: '1', LW_2: '2', FS_1: '1', FS_2: '2',
-  LG_1: 'C', LG_2: 'NO', HG_1: 'C', HG_2: 'NC', AP_1: 'C', AP_2: 'NO',
-  RM_L1: 'L1', RM_L2: 'L2', RM_3: '3', RM_4: '4', RM_6: '6', RM_7: '7', RM_8: '8', RM_9: '9', RM_10: '10', FT_P: '+', FT_N: '−',
-  PV_1: '1', PV_2: '2', V1_1: '1', V1_2: '2', V2_1: '1', V2_2: '2', IG_1: '1', IG_2: '2'
+  VFD_L1: 'L1', VFD_L2: 'L2/N', VFD_L3: 'L3', VFD_U: 'U', VFD_V: 'V', VFD_W: 'W', BM_U: 'U', BM_V: 'V', BM_W: 'W',
+  FUA_IN: 'IN', FUA_OUT: 'OUT', FUB_IN: 'IN', FUB_OUT: 'OUT', XF_H1: 'H1', XF_H2: 'H2', XF_X1: 'X1', XF_X2: 'X2',
+  CB_1: 'LINE', CB_2: 'LOAD', BS_1: '1', BS_2: '2', FL_C: 'C', FL_NO: 'NO', EN_1: 'TB4', EN_2: 'TB5', GND: 'GND',
+  HL_1: 'C', HL_2: 'NC', OC_1: 'Q13', OC_2: 'Q14', LG_1: 'C', LG_2: 'NO', HG_1: 'C', HG_2: 'NC', FS_1: 'NO', FS_2: 'C',
+  LW_1: '1', LW_2: '2', VF_1: '1', VF_2: '2', AP_1: 'C', AP_2: 'NO',
+  RM_L2: 'L2', RM_3: '3', RM_4: '4', RM_5: '5', RM_6: '6', RM_7: '7', RM_8: '8', RM_9: '9', RM_10: '10', FT_P: '+', FT_N: '−',
+  CR1_A: '14', CR1_B: '13', CR2_A: '14', CR2_B: '13', TD_1: 'IN', TD_2: 'COM', AL_1: '1', AL_2: '2',
+  IG_1: '1', IG_2: '2', PV_1: '1', PV_2: '2', V1_1: 'L', V1_2: 'N', V2_1: '1', V2_2: '2', VV_1: '1', VV_2: '2',
+  OL_95: '95', OL_96: '96', PS_A: 'A', PS_B: 'B', PS_L1: 'L1', PS_L2: 'L2', PS_L3: 'L3', PS_T1: 'T1', PS_T2: 'T2', PS_T3: 'T3', PM_T1: 'T1', PM_T2: 'T2', PM_T3: 'T3'
 };
-/* terminal positions [id, x, y, label side: 'a' above (default below)] */
+for (let n = 1; n <= 12; n++) TLBL['TB' + n] = String(n);
+/* terminal positions [id, x, y, label: 'a' above, 'ad' above dark (on a light plate), 'r' right; default below] */
 const TERMS = [
   ['LN_L1', 120, 122, 'r'], ['LN_L2', 240, 122, 'r'], ['LN_L3', 360, 122, 'r'], ['F1_IN', 120, 196, 'r'], ['F2_IN', 240, 196, 'r'], ['F3_IN', 360, 196, 'r'],
   ['F1_OUT', 120, 304], ['F2_OUT', 240, 304], ['F3_OUT', 360, 304],
-  ['XF_H1', 570, 140, 'a'], ['XF_H2', 570, 270], ['XF_X1', 690, 140, 'a'], ['XF_X2', 690, 270],
-  ['FU_IN', 840, 190], ['FU_OUT', 890, 190], ['NB', 1030, 130], ['GND', 1030, 270],
-  ['M1_L1', 120, 475], ['M1_L2', 240, 475], ['M1_L3', 360, 475], ['M1_T1', 120, 605], ['M1_T2', 240, 605], ['M1_T3', 360, 605], ['M1_A', 420, 475], ['M1_B', 420, 605],
-  ['BM_T1', 560, 640], ['BM_T2', 630, 640], ['BM_T3', 700, 640],
-  ['EN_1', 870, 610], ['EN_2', 1030, 610],
-  ['PS_L1', 120, 795], ['PS_L2', 240, 795], ['PS_L3', 360, 795], ['PS_T1', 120, 925], ['PS_T2', 240, 925], ['PS_T3', 360, 925], ['PS_A', 420, 795], ['PS_B', 420, 925],
-  ['OL_95', 320, 1000], ['OL_96', 410, 1000],
-  ['PM_T1', 560, 985], ['PM_T2', 630, 985], ['PM_T3', 700, 985],
-  ['AL_1', 870, 830], ['AL_2', 1030, 830], ['BS_1', 870, 1020], ['BS_2', 1030, 1020],
-  ['OC_1', 85, 1220], ['OC_2', 245, 1220], ['HL_1', 350, 1220], ['HL_2', 510, 1220], ['LW_1', 615, 1220], ['LW_2', 775, 1220], ['FS_1', 880, 1220], ['FS_2', 1040, 1220],
-  ['LG_1', 100, 1430], ['LG_2', 300, 1430], ['HG_1', 460, 1430], ['HG_2', 660, 1430], ['AP_1', 820, 1430], ['AP_2', 1020, 1430],
-  ['FT_P', 960, 1640], ['FT_N', 1040, 1640],
-  ['RM_L1', 120, 1790, 'ad'], ['RM_L2', 225, 1790, 'ad'], ['RM_3', 330, 1790, 'ad'], ['RM_4', 435, 1790, 'ad'], ['RM_6', 540, 1790, 'ad'], ['RM_7', 645, 1790, 'ad'], ['RM_8', 750, 1790, 'ad'], ['RM_9', 855, 1790, 'ad'], ['RM_10', 960, 1790, 'ad'],
-  ['IG_1', 85, 2030], ['IG_2', 245, 2030], ['PV_1', 350, 2030], ['PV_2', 510, 2030], ['V1_1', 615, 2030], ['V1_2', 775, 2030], ['V2_1', 880, 2030], ['V2_2', 1040, 2030]
+  ['VFD_L1', 510, 300], ['VFD_L2', 555, 300], ['VFD_L3', 600, 300], ['VFD_U', 660, 300], ['VFD_V', 705, 300], ['VFD_W', 750, 300],
+  ['FUA_IN', 830, 140], ['FUA_OUT', 880, 140], ['FUB_IN', 960, 140], ['FUB_OUT', 1010, 140],
+  ['XF_H1', 890, 230, 'a'], ['XF_H2', 890, 310], ['XF_X1', 1010, 230, 'a'], ['XF_X2', 1010, 310],
+  ['BM_U', 120, 630], ['BM_V', 190, 630], ['BM_W', 260, 630],
+  ['CB_1', 400, 480], ['CB_2', 490, 480], ['BS_1', 590, 480], ['BS_2', 680, 480], ['FL_C', 410, 640], ['FL_NO', 520, 640],
+  ['GND', 1040, 470], ['EN_1', 800, 640], ['EN_2', 1040, 640],
+  ['OL_95', 320, 2340], ['OL_96', 410, 2340], ['PS_A', 420, 2135], ['PS_B', 420, 2265],
+  ['PS_L1', 120, 2135], ['PS_L2', 240, 2135], ['PS_L3', 360, 2135], ['PS_T1', 120, 2265], ['PS_T2', 240, 2265], ['PS_T3', 360, 2265],
+  ['PM_T1', 560, 2330], ['PM_T2', 630, 2330], ['PM_T3', 700, 2330],
+  ['HL_1', 85, 1000], ['HL_2', 245, 1000], ['OC_1', 350, 1000], ['OC_2', 510, 1000], ['LG_1', 615, 1000], ['LG_2', 775, 1000], ['HG_1', 880, 1000], ['HG_2', 1040, 1000],
+  ['FS_1', 85, 1190], ['FS_2', 245, 1190], ['LW_1', 350, 1190], ['LW_2', 510, 1190], ['VF_1', 615, 1190], ['VF_2', 775, 1190], ['AP_1', 880, 1190], ['AP_2', 1040, 1190],
+  ['FT_P', 960, 1390], ['FT_N', 1040, 1390],
+  ['RM_L2', 120, 1540, 'ad'], ['RM_3', 225, 1540, 'ad'], ['RM_4', 330, 1540, 'ad'], ['RM_5', 435, 1540, 'ad'], ['RM_6', 540, 1540, 'ad'], ['RM_7', 645, 1540, 'ad'], ['RM_8', 750, 1540, 'ad'], ['RM_9', 855, 1540, 'ad'], ['RM_10', 960, 1540, 'ad'],
+  ['CR1_A', 248, 1692, 'r'], ['CR1_B', 248, 1762, 'r'], ['CR2_A', 513, 1692, 'r'], ['CR2_B', 513, 1762, 'r'], ['TD_1', 620, 1760], ['TD_2', 780, 1760], ['AL_1', 880, 1760], ['AL_2', 1040, 1760],
+  ['IG_1', 75, 1965], ['IG_2', 205, 1965], ['PV_1', 287, 1965], ['PV_2', 417, 1965], ['V1_1', 499, 1965], ['V1_2', 629, 1965], ['V2_1', 711, 1965], ['V2_2', 841, 1965], ['VV_1', 923, 1965], ['VV_2', 1053, 1965]
 ];
+for (let n = 1; n <= 12; n++) TERMS.push(['TB' + n, 85 + (n - 1) * 88, 790, 'ad']);
 TERMS.forEach(t => { TPOS[t[0]] = [t[1], t[2]]; });
 
 function pbox(x, y, w, h, t, s) {
@@ -973,7 +1038,6 @@ function pbox(x, y, w, h, t, s) {
 }
 function psect(y, label) { return `<text x="24" y="${y}" style="font:700 13px var(--head);letter-spacing:.16em;fill:var(--yellow);text-transform:uppercase">${label}</text>`; }
 
-/* boiler parts not in the package unit set, drawn in the same style */
 const BX = {
   /* cartridge fuse in a black holder between an in and an out lug */
   cartridge(x, y1, y2, amps) {
@@ -1046,53 +1110,98 @@ const BX = {
       `<rect x="${cx - 34}" y="${cy - 18}" width="68" height="26" rx="3" fill="#f1f3f5"/><text x="${cx}" y="${cy - 1}" text-anchor="middle" style="font:700 9px sans-serif;fill:#20262c">6000 V</text>`;
   }
 };
+Object.assign(BX, {
+  /* variable frequency drive: grey body, keypad with a live display, heat-sink fins */
+  vfd(x, y, w, h) {
+    let s = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="#5f6b77" stroke="#2c343c" stroke-width="2"/>`;
+    for (let xx = x + 12; xx < x + w - 8; xx += 12) s += `<line x1="${xx}" y1="${y + h - 46}" x2="${xx}" y2="${y + h - 10}" stroke="#3d4650" stroke-width="3"/>`;
+    s += `<rect x="${x + 20}" y="${y + 16}" width="${w - 40}" height="54" rx="5" fill="#0d1822" stroke="#25343f" stroke-width="2"/><text id="pnlVfd" x="${x + w / 2}" y="${y + 50}" text-anchor="middle" style="font:700 15px var(--mono);fill:#7fd7ff"></text>`;
+    ['STOP', 'RUN', 'FWD'].forEach((t, i) => { s += `<rect x="${x + 30 + i * 74}" y="${y + 84}" width="60" height="26" rx="5" fill="${i ? '#2f3943' : '#b3302a'}" stroke="#1d242b"/><text x="${x + 60 + i * 74}" y="${y + 101}" text-anchor="middle" style="font:700 10px sans-serif;fill:#fff">${t}</text>`; });
+    return s;
+  },
+  /* RWF55 temperature controller: red actual value, green setpoint, burner-on LED */
+  rwf(x, y, w) {
+    return `<rect x="${x}" y="${y}" width="${w}" height="76" rx="6" fill="#20262c" stroke="#0b0e11" stroke-width="2"/><rect x="${x + 10}" y="${y + 8}" width="${w - 20}" height="34" rx="3" fill="#0b0f12"/>` +
+      `<text id="pnlRwfPV" x="${x + w - 18}" y="${y + 34}" text-anchor="end" style="font:700 22px var(--mono);fill:#ff4a3d">---</text><text x="${x + 16}" y="${y + 34}" style="font:700 10px sans-serif;fill:#8fa1b3">RWF55</text>` +
+      `<text id="pnlRwfSP" x="${x + w - 18}" y="${y + 64}" text-anchor="end" style="font:700 15px var(--mono);fill:#38e08a">180</text><circle id="pnlRwfLed" cx="${x + 20}" cy="${y + 58}" r="5" fill="#3b4652"/><text x="${x + 30}" y="${y + 62}" style="font:700 8px sans-serif;fill:#8fa1b3">BURNER</text>`;
+  },
+  /* small panel lamp */
+  lamp(cx, cy, id, col, label) {
+    return `<circle id="${id}" data-on="${col}" cx="${cx}" cy="${cy}" r="13" fill="#3b4652" stroke="#1d242b" stroke-width="3"/><text x="${cx}" y="${cy + 30}" text-anchor="middle" style="font:700 9px sans-serif;fill:#c8d2dc">${label}</text>`;
+  },
+  /* 5 A control circuit breaker */
+  breaker(cx, cy) {
+    return `<rect x="${cx - 26}" y="${cy - 30}" width="52" height="60" rx="5" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/><rect x="${cx - 9}" y="${cy - 22}" width="18" height="26" rx="3" fill="#d9dde1" stroke="#7b848c"/><text x="${cx}" y="${cy + 22}" text-anchor="middle" style="font:700 10px sans-serif;fill:#e9edf1">5 A</text>`;
+  },
+  /* time delay module */
+  timer(x, y, w) {
+    return `<rect x="${x}" y="${y}" width="${w}" height="56" rx="6" fill="#e7ebee" stroke="#7d8892" stroke-width="2"/><circle cx="${x + 30}" cy="${y + 28}" r="14" fill="#f4f6f8" stroke="#6b7480" stroke-width="2"/><line x1="${x + 30}" y1="${y + 28}" x2="${x + 38}" y2="${y + 18}" stroke="#b3302a" stroke-width="2.5"/>` +
+      `<text x="${x + 56}" y="${y + 24}" style="font:700 11px sans-serif;fill:#20262c">TD-1</text><text x="${x + 56}" y="${y + 42}" style="font:700 10px sans-serif;fill:#3a434c">20 SEC</text><circle id="pnlTdLed" cx="${x + w - 18}" cy="${y + 28}" r="5" fill="#3b4652"/>`;
+  }
+});
 
 function buildPanel() {
   let g = PT.defs + `<rect x="0" y="0" width="${PANEL_W}" height="${PANEL_H}" rx="10" fill="#1a222b"/>`;
   /* ---- power ---- */
-  g += pbox(40, 30, 420, 310, 'Fused disconnect', '208 V 3 phase · 15 A fuses') + BX.blades([120, 240, 360], 122, 196);
+  g += pbox(40, 30, 420, 320, 'Fused disconnect', 'by others · 208 V 3 phase') + BX.blades([120, 240, 360], 122, 196);
   [120, 240, 360].forEach(x => { g += BX.cartridge(x, 198, 302, '15 A'); });
   g += `<text class="sub" x="438" y="126" text-anchor="end" style="font-size:11px">LINE</text><text class="sub" x="438" y="200" text-anchor="end" style="font-size:11px">LOAD</text>`;
-  g += pbox(480, 30, 300, 310, 'Control transformer', '208 V in · 120 V out') + PT.xfmr(492, 100, 276, 210, 570, 690, 140, 270, '208 V', '120 V');
-  g += pbox(800, 30, 140, 240, 'Fuse FU4', '120 V, 3 A') + PT.fuse(840, 890, 190);
-  g += pbox(960, 30, 140, 310, 'Neutral', 'X2 bar · ground') + PT.tbar(990, 1070, 130) + PT.ground(1030, 270);
-  /* ---- motor starters ---- */
-  g += psect(370, 'Motor starters');
-  g += pbox(40, 380, 420, 300, 'Blower contactor M1', '') + PT.contactor(50, 432, 410, 216, [120, 240, 360], 475, 605, [420, 475, 605], 'm1');
-  g += pbox(480, 380, 300, 300, 'Burner blower', '3/4 hp, 208 V, 3 phase') + PT.wheel(630, 520, 64, 'blw') + PT.tbar(520, 740, 640);
-  g += pbox(800, 380, 300, 300, 'Heating call', 'Contact from building controls') + PT.module(820, 450, 260, 90, '#e7ebee') + PT.pswitch(870, 1030, 610, 'call');
-  g += pbox(40, 700, 420, 360, 'Pump starter', '') + PT.contactor(50, 752, 410, 216, [120, 240, 360], 795, 925, [420, 795, 925], 'ps') + BX.overload(60, 968, 390);
-  g += pbox(480, 700, 300, 360, 'Circulating pump', '1 hp, 208 V, 3 phase') + PT.motor(520, 790, 200, 110) + PT.tbar(520, 740, 985);
-  g += pbox(800, 700, 300, 170, 'Alarm light', 'Panel door, 120 V') + `<circle id="pnlAlarm" cx="950" cy="788" r="24" fill="#3a1d1a" stroke="#7a3a33" stroke-width="4"/>`;
-  g += pbox(800, 890, 300, 170, 'Burner switch', '') + BX.toggle(950, 972);
+  g += pbox(480, 30, 300, 330, 'VFD', 'A/C Tech SCF · L1-L3 in, U V W out') + BX.vfd(495, 90, 270, 175) + PT.tbar(486, 774, 300);
+  g += pbox(800, 30, 300, 330, 'Control transformer', '') + PT.fuse(830, 880, 140) + PT.fuse(960, 1010, 140) + PT.xfmr(812, 200, 276, 140, 890, 1010, 230, 310, '208 V', '115 V');
+  /* ---- blower and switches ---- */
+  g += psect(370, 'Blower, control power and switches');
+  g += pbox(40, 380, 300, 300, 'Combustion blower', '2 hp, 3 phase (from VFD)') + PT.wheel(190, 520, 60, 'blw') + PT.tbar(80, 300, 630);
+  g += pbox(360, 380, 170, 140, 'Circuit breaker', '') + BX.breaker(445, 452);
+  g += pbox(550, 380, 170, 140, 'Burner switch', '') + BX.lamp(635, 440, 'pnlBsLamp', '#f5c400', 'ON');
+  g += pbox(360, 540, 360, 140, 'Blocked air filter switch', '') + BX.lamp(640, 600, 'pnlFltLamp', '#ffb020', 'CHANGE FILTER');
+  g += pbox(740, 380, 360, 140, 'Ground', 'X2 is grounded at TB2') + PT.ground(1040, 470);
+  g += pbox(740, 540, 360, 140, 'Field enable / heat call', 'TB4 to TB5 (factory jumper removed)') + PT.pswitch(800, 1040, 640, 'call');
+  /* ---- terminal strip ---- */
+  g += psect(710, 'Terminal strip (Figure 9c)');
+  g += `<rect x="40" y="720" width="1060" height="110" rx="8" fill="url(#ptBeige)" stroke="#8d8672" stroke-width="2"/>`;
+  [['1', 'X1'], ['2', 'N'], ['3', 'CB'], ['4', 'SW'], ['5', 'LIM'], ['6', 'RM6'], ['7', 'RM7'], ['8', 'PILOT'], ['9', 'MAIN'], ['10', 'IGN'], ['11', 'CRA1'], ['12', 'CRA2']].forEach((t, i) => {
+    g += `<text x="${85 + i * 88}" y="826" text-anchor="middle" style="font:700 9px sans-serif;fill:#3a434c">${t[1]}</text>`;
+  });
   /* ---- limit string ---- */
-  g += psect(1080, 'Limit string · burner switch → operating → high limit → low water → flow → RM 6');
-  g += pbox(40, 1090, 250, 170, 'Operating aquastat', '') + BX.aquastat(60, 1140, 210, '180°F');
-  g += pbox(305, 1090, 250, 170, 'High limit (MR)', '') + BX.aquastat(325, 1140, 210, '210°F', true);
-  g += pbox(570, 1090, 250, 170, 'Low-water cutoff', '') + BX.lwco(590, 1140, 210);
-  g += pbox(835, 1090, 250, 170, 'Flow switch', '') + BX.flowsw(855, 1132, 210);
-  /* ---- interlocks ---- */
-  g += psect(1290, 'Lockout interlocks · RM 6 → low gas → high gas → air switch → RM 7');
-  g += pbox(40, 1300, 340, 170, 'Low gas pressure', '') + BX.dswitch(200, 1378, 'url(#ptBlue)', 'LOW GAS', '3.5 in. MR');
-  g += pbox(400, 1300, 340, 170, 'High gas pressure', '') + BX.dswitch(560, 1378, '#b3302a', 'HIGH GAS', '5.0 in. MR');
-  g += pbox(760, 1300, 340, 170, 'Air proving switch', '') + BX.dswitch(920, 1378, '#6d7c8b', 'AIR', '0.5 in.');
+  g += psect(850, 'Limit string · TB5 → high limit → RWF55 → low gas → high gas → flow → low water → vestibule fuse → TB6');
+  g += pbox(40, 860, 250, 170, 'High limit L4008E', '') + BX.aquastat(60, 905, 210, '210°F', true);
+  g += pbox(305, 860, 250, 170, 'Operating (RWF55)', '') + BX.rwf(320, 900, 220);
+  g += pbox(570, 860, 250, 170, 'Low gas pressure', '') + BX.dswitch(695, 935, 'url(#ptBlue)', 'LOW GAS', 'MR');
+  g += pbox(835, 860, 250, 170, 'High gas pressure', '') + BX.dswitch(960, 935, '#b3302a', 'HIGH GAS', 'MR');
+  g += pbox(40, 1050, 250, 170, 'Flow switch FS4-3', '') + BX.flowsw(60, 1092, 210);
+  g += pbox(305, 1050, 250, 170, 'Low-water cutoff', '') + BX.lwco(325, 1092, 210);
+  g += pbox(570, 1050, 250, 170, 'Vestibule fuse switch', '') + `<rect x="645" y="1100" width="100" height="44" rx="6" fill="url(#ptBlack)" stroke="#0b0e11"/><rect x="665" y="1114" width="60" height="16" rx="3" fill="url(#ptBrass)" stroke="#5c3f10"/>`;
+  g += pbox(835, 1050, 250, 170, 'Combustion airflow sw.', '') + BX.dswitch(960, 1130, '#6d7c8b', 'AIR', '');
   /* ---- relay module ---- */
-  g += psect(1500, 'Flame safeguard relay module (7800 series, on/off)');
-  g += pbox(40, 1510, 1060, 340, 'Relay module on its subbase', 'Keyboard display, plug-in flame amplifier, UV scanner on F and G');
-  g += `<rect x="70" y="1570" width="820" height="160" rx="10" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/><rect x="80" y="1580" width="800" height="14" rx="4" fill="#2d343b"/>`;
-  g += `<rect x="110" y="1610" width="330" height="96" rx="8" fill="#0d1822" stroke="#25343f" stroke-width="3"/><text id="pnlKdm" x="275" y="1650" text-anchor="middle" style="font:700 20px var(--mono);fill:#7fd7ff">---</text><text id="pnlKdm2" x="275" y="1680" text-anchor="middle" style="font:13px var(--mono);fill:#7fd7ff"></text>`;
-  ['POWER', 'PILOT', 'FLAME', 'MAIN', 'ALARM'].forEach((t, i) => { g += `<circle class="pled" data-led="${t}" cx="${490 + i * 76}" cy="1640" r="8" fill="#3b4652"/><text x="${490 + i * 76}" y="1668" text-anchor="middle" style="font:700 10px sans-serif;fill:#c8d2dc">${t}</text>`; });
-  g += `<rect x="910" y="1570" width="170" height="110" rx="8" fill="#17543a" stroke="#0a2a1c" stroke-width="2"/><text x="995" y="1596" text-anchor="middle" style="font:700 10px sans-serif;fill:#e9efe9">FLAME AMPLIFIER</text><text x="995" y="1610" text-anchor="middle" style="font:700 9px sans-serif;fill:#bfe6cf">TEST JACKS V dc</text>`;
-  g += `<rect x="70" y="1748" width="1000" height="80" rx="8" fill="url(#ptBeige)" stroke="#8d8672" stroke-width="2"/><text x="1056" y="1820" text-anchor="end" style="font:700 10px sans-serif;fill:#3a434c">SUBBASE</text>`;
+  g += psect(1250, 'Flame safeguard RM7896D (30 s purge card ST7800A)');
+  g += pbox(40, 1260, 1060, 330, '', '');
+  g += `<rect x="70" y="1280" width="820" height="170" rx="10" fill="url(#ptBlack)" stroke="#0b0e11" stroke-width="2"/><rect x="80" y="1290" width="800" height="14" rx="4" fill="#2d343b"/>`;
+  g += `<text x="96" y="1326" style="font:700 12px sans-serif;fill:#c8d2dc">HONEYWELL RM7896D</text>`;
+  g += `<rect x="110" y="1340" width="330" height="96" rx="8" fill="#0d1822" stroke="#25343f" stroke-width="3"/><text id="pnlKdm" x="275" y="1380" text-anchor="middle" style="font:700 20px var(--mono);fill:#7fd7ff">---</text><text id="pnlKdm2" x="275" y="1410" text-anchor="middle" style="font:13px var(--mono);fill:#7fd7ff"></text>`;
+  ['POWER', 'PILOT', 'FLAME', 'MAIN', 'ALARM'].forEach((t, i) => { g += `<circle class="pled" data-led="${t}" cx="${490 + i * 76}" cy="1370" r="8" fill="#3b4652"/><text x="${490 + i * 76}" y="1398" text-anchor="middle" style="font:700 10px sans-serif;fill:#c8d2dc">${t}</text>`; });
+  g += `<rect x="910" y="1300" width="170" height="130" rx="8" fill="#17543a" stroke="#0a2a1c" stroke-width="2"/><text x="995" y="1326" text-anchor="middle" style="font:700 10px sans-serif;fill:#e9efe9">R7849A UV AMPLIFIER</text><text x="995" y="1342" text-anchor="middle" style="font:700 9px sans-serif;fill:#bfe6cf">TEST JACKS V dc</text>`;
+  g += `<rect x="70" y="1498" width="1000" height="80" rx="8" fill="url(#ptBeige)" stroke="#8d8672" stroke-width="2"/><text x="1056" y="1570" text-anchor="end" style="font:700 10px sans-serif;fill:#3a434c">SUBBASE · F to UV scanner</text>`;
+  /* ---- relays ---- */
+  g += psect(1610, 'Relays and timer');
+  g += pbox(40, 1620, 255, 170, 'CRA1 enable blower', '') + PT.relay(48, 1662, 240, 118, 'cra1');
+  g += pbox(305, 1620, 255, 170, 'CRA2 release to mod', '') + PT.relay(313, 1662, 240, 118, 'cra2');
+  g += pbox(570, 1620, 255, 170, 'Time delay TD-1', 'from TB9 → TB12') + BX.timer(600, 1676, 200);
+  g += pbox(835, 1620, 255, 170, 'Alarm light', 'from RM 3') + `<circle id="pnlAlarm" cx="960" cy="1700" r="24" fill="#3a1d1a" stroke="#7a3a33" stroke-width="4"/>`;
   /* ---- loads ---- */
-  g += psect(1880, 'Burner loads (120 V)');
-  g += pbox(40, 1890, 250, 190, 'Ignition xfmr', '') + BX.ignx(165, 1985);
-  g += pbox(305, 1890, 250, 190, 'Pilot valve', '') + BX.solenoid(430, 1975);
-  g += pbox(570, 1890, 250, 190, 'Main valve V1', '') + BX.actuator(695, 1975, 'pnlV1');
-  g += pbox(835, 1890, 250, 190, 'Main valve V2', '') + BX.actuator(960, 1975, 'pnlV2');
+  g += psect(1810, 'Burner loads (115 V)');
+  g += pbox(40, 1820, 200, 190, 'Ignition xfmr', '') + BX.ignx(140, 1915);
+  g += pbox(252, 1820, 200, 190, 'Pilot V4046', '') + BX.solenoid(352, 1895);
+  g += pbox(464, 1820, 200, 190, 'SKP75 actuator', '') + BX.actuator(564, 1900, 'pnlV1');
+  g += pbox(676, 1820, 200, 190, 'Secondary valve', '') + BX.solenoid(776, 1895).replace('120 V', '115 V') + `<text id="pnlV2" x="776" y="1935" text-anchor="middle" style="font:800 10px sans-serif;fill:#e5483b">CLOSED</text>`;
+  g += pbox(888, 1820, 200, 190, 'Vent valve (N.O.)', '') + BX.solenoid(988, 1895).replace('120 V', 'VENT');
+  /* ---- system pump (by others) ---- */
+  g += psect(2020, 'System pump (by others) · fed from TB3, runs whenever the boiler has power');
+  g += pbox(40, 2030, 420, 360, 'System pump starter', '') + PT.contactor(50, 2092, 410, 216, [120, 240, 360], 2135, 2265, [420, 2135, 2265], 'ps') + BX.overload(60, 2308, 390);
+  g += pbox(480, 2030, 300, 360, 'System pump motor', '5 hp, 208 V, 3 phase') + PT.motor(520, 2130, 200, 110) + PT.tbar(520, 740, 2330);
+  g += pbox(800, 2030, 300, 360, 'Field wiring', '') + `<text class="sub" x="816" y="2100">The pump keeps water moving</text><text class="sub" x="816" y="2122">through the building at all times.</text><text class="sub" x="816" y="2160">Starter coil: TB3 → OL 95-96 → A,</text><text class="sub" x="816" y="2182">B → TB2 (neutral).</text>`;
   /* brass lugs under every terminal, wires, then the terminal dots */
   g += PT.lugs(TERMS.filter(t => !/^FT_/.test(t[0])).map(t => [t[1], t[2]]));
-  g += `<circle cx="960" cy="1640" r="12" fill="#c33" stroke="#6e1712" stroke-width="2"/><circle cx="1040" cy="1640" r="12" fill="#222" stroke="#000" stroke-width="2"/>`;
+  g += `<circle cx="960" cy="1390" r="12" fill="#c33" stroke="#6e1712" stroke-width="2"/><circle cx="1040" cy="1390" r="12" fill="#222" stroke="#000" stroke-width="2"/>`;
   g += buildWires();
   TERMS.forEach(t => {
     const id = t[0], x = t[1], y = t[2], side = t[3] === 'r', up = t[3] === 'a' || t[3] === 'ad', ly = side ? y + 5 : up ? y - 20 : y + 34, lx = side ? x + 24 : x;
@@ -1102,22 +1211,22 @@ function buildPanel() {
   });
   return g;
 }
-/* field wiring, drawn when "Wires: On". Leg colours as in the package unit game; red 120 V hot, blue neutral */
+/* field wiring, drawn when "Wires: On". Leg colours as in the package unit game; red 115 V hot, blue neutral */
 function buildWires() {
   const LEG = { 1: '#e8a33b', 2: '#b48cff', 3: '#4ac9c0' };
   let s = '';
   NETS.forEach((n, i) => {
     const pts = n.filter(id => TPOS[id]);
     if (pts.length < 2) return;
-    const neutral = n.indexOf('NB') >= 0;
-    const lm = n.join(' ').match(/\b(?:F|M1_T|PS_T)([123])/);
-    const col = neutral ? '#4aa3df' : lm ? LEG[lm[1]] : '#e5483b';
-    const root = neutral ? 'NB' : pts[0];
+    const neutral = n.indexOf('TB2') >= 0;
+    const lm = n.join(' ').match(/\bF([123])_OUT|\bPS_T([123])|\bVFD_([UVW])/);
+    const col = neutral ? '#4aa3df' : lm ? LEG[lm[1] || lm[2] || ({ U: 1, V: 2, W: 3 })[lm[3]]] : '#e5483b';
+    const root = neutral ? 'TB2' : pts[0];
     for (let k = neutral ? 0 : 1; k < pts.length; k++) {
       const a = TPOS[neutral ? root : pts[k - 1]], b = TPOS[pts[k]];
       if (a === b) continue;
       const lane = 22 + (i % 6) * 5;
-      const d = Math.abs(a[1] - b[1]) < 4 ? `M${a[0]} ${a[1]} V${a[1] + lane} H${b[0]} V${b[1]}` : `M${a[0]} ${a[1]} V${Math.max(a[1], b[1]) + lane} H${b[0]} V${b[1]}`;
+      const d = `M${a[0]} ${a[1]} V${Math.max(a[1], b[1]) + lane} H${b[0]} V${b[1]}`;
       s += `<path class="wr" d="${d}" stroke="${col}" stroke-width="3.5" fill="none" stroke-linejoin="round" stroke-linecap="round" opacity=".85"/>`;
     }
   });
@@ -1170,47 +1279,58 @@ function powerLadder() {
   let s = `<text class="t" x="70" y="22">208 V 3 PHASE</text>`;
   const L = [100, 140, 180], BUS = [150, 170, 190], COL = ['#e8a33b', '#b48cff', '#4ac9c0'];
   L.forEach((x, i) => {
-    s += `<text x="${x}" y="44" text-anchor="middle">L${i + 1}</text><path class="w" d="M${x} 50 v8" style="stroke:${COL[i]}"/>` + VS.no(x, 58, i === 2 ? 'DISC' : '') + VS.fuse(x, 94, i === 2 ? 'F1-F3 15A' : '');
+    s += `<text x="${x}" y="44" text-anchor="middle">L${i + 1}</text><path class="w" d="M${x} 50 v8" style="stroke:${COL[i]}"/>` + VS.no(x, 58, i === 2 ? 'DISC (BY OTHERS)' : '') + VS.fuse(x, 94, i === 2 ? 'F1-F3' : '');
     s += `<path class="w" d="M${x} 142 V${BUS[i]} H700" style="stroke:${COL[i]}"/>`;
   });
   s += `<path class="w" d="M70 76 H200" style="stroke-dasharray:4 4"/>`;
-  /* blower: M1 contacts to the motor */
-  [310, 340, 370].forEach((x, i) => { s += `<circle cx="${x}" cy="${BUS[i]}" r="3.5" fill="#b9c6d3"/><path class="w" d="M${x} ${BUS[i]} V206"/>` + VS.no(x, 206, i === 2 ? 'M1' : '') + `<path class="w" d="M${x} 242 V262 L340 270"/>`; });
-  s += VS.motor(340, 296, 'BLOWER');
-  /* pump: starter contacts and overload heaters */
+  /* VFD to the 2 hp blower */
+  [300, 330, 360].forEach((x, i) => { s += `<circle cx="${x}" cy="${BUS[i]}" r="3.5" fill="#b9c6d3"/><path class="w" d="M${x} ${BUS[i]} V210"/>`; });
+  s += `<rect class="p" x="280" y="210" width="100" height="40" rx="4"/><text x="330" y="235" text-anchor="middle">VFD</text><text x="390" y="226">RUN: CRA1</text><text x="390" y="242">SPEED: RWF55</text>`;
+  s += `<path class="w" d="M300 250 V262 L330 270 M330 250 V270 M360 250 V262 L330 270"/>` + VS.motor(330, 296, 'BLOWER 2 HP');
+  /* system pump starter (by others) */
   [490, 520, 550].forEach((x, i) => { s += `<circle cx="${x}" cy="${BUS[i]}" r="3.5" fill="#b9c6d3"/><path class="w" d="M${x} ${BUS[i]} V206"/>` + VS.no(x, 206, i === 2 ? 'PS' : '') + VS.ol(x, 242) + `<path class="w" d="M${x} 270 V272 L520 276"/>`; });
-  s += `<text x="566" y="262">OL</text>` + VS.motor(520, 300, 'PUMP');
-  /* control transformer on L1-L2 */
-  s += `<path class="w" d="M640 150 V214 M670 170 V214"/><circle cx="640" cy="150" r="3.5" fill="#b9c6d3"/><circle cx="670" cy="170" r="3.5" fill="#b9c6d3"/>`;
-  s += `<path class="w" d="M630 214 h50 M640 214 q-2 8 0 8 M640 216 q8 4 0 8 q8 4 0 8 q8 4 0 8 M670 216 q8 4 0 8 q8 4 0 8 q8 4 0 8 M630 246 h50 M630 250 h50"/>`;
-  s += `<text x="690" y="222">H1-H2 208 V</text><text x="690" y="262">X1-X2 120 V</text>`;
-  s += `<path class="w" d="M640 250 V362 H${RAIL_L - 40} V${330 + 60}"/><path class="w" d="M670 250 V276 H${RAIL_R} V${330 + 46}"/><text x="${RAIL_R - 40}" y="270">X2 (grounded)</text><text x="${RAIL_L - 36}" y="356">X1</text>`;
+  s += `<text x="566" y="262">OL</text>` + VS.motor(520, 300, 'SYSTEM PUMP');
+  /* control transformer through two primary fuses on L1-L2 */
+  s += `<path class="w" d="M640 150 V170 M670 170 V170"/><circle cx="640" cy="150" r="3.5" fill="#b9c6d3"/><circle cx="670" cy="170" r="3.5" fill="#b9c6d3"/>`;
+  s += VS.fuse(640, 152, '') + VS.fuse(670, 172, 'FU1').replace('M670 172 v8', 'M670 172 v8');
+  s += `<path class="w" d="M640 200 V214 M670 220 V214 M630 214 h50 M640 216 q8 4 0 8 q8 4 0 8 q8 4 0 8 M670 216 q8 4 0 8 q8 4 0 8 q8 4 0 8 M630 246 h50 M630 250 h50"/>`;
+  s += `<text x="690" y="236">208 / 115 V</text>`;
+  s += `<path class="w" d="M640 250 V362 H${RAIL_L - 40} V${330 + 60}"/><path class="w" d="M670 250 V276 H${RAIL_R} V${330 + 46}"/><text x="${RAIL_R - 60}" y="270">X2 = TB2 (grounded)</text><text x="${RAIL_L - 36}" y="356">X1 = TB1</text>`;
   return s;
 }
 function buildLadder() {
   let s = powerLadder() + '<g transform="translate(0,330)">';
-  s += `<text class="t" x="${RAIL_L + 60}" y="22">120 V CONTROL (X1 after FU4)</text><text class="t" x="${RAIL_R - 6}" y="30">X2</text>`;
-  /* control fuse FU4 feeding the left rail */
-  s += SYM.fuse(RAIL_L - 40, 60, 'FU4 3A')[0] + `<path class="w" d="M${RAIL_L + 16} 60 h20 v20 H${RAIL_L} V1010"/>`;
+  s += `<text class="t" x="${RAIL_L + 60}" y="22">115 V CONTROL (TB3 after the 5 A breaker)</text><text class="t" x="${RAIL_R - 6}" y="30">TB2</text>`;
+  s += SYM.fuse(RAIL_L - 40, 60, 'CB 5A')[0] + `<path class="w" d="M${RAIL_L + 16} 60 h20 v20 H${RAIL_L} V1010"/><text x="${RAIL_L + 40}" y="96">TB3</text>`;
   s += `<path class="w" d="M${RAIL_R} 46 V1010"/>`;
-  /* rung 1: the pump runs whenever the boiler has power (continuous circulation), through its overload contact */
-  s += rung(130, [['nc', 'OL 95-96'], ['coil', 'PS']], { label: '1' });
-  s += `<text x="${RAIL_L + 20}" y="190" style="font:11px var(--mono);fill:#8fa1b3">PS = pump starter: runs continuously. OL opens on motor overload (manual reset).</text>`;
-  /* rung 3: from A through the limit string to terminal 6 */
-  /* rung 3: the heating call from the building enables the burner through the limit string to terminal 6 */
-  s += rung(290, [['no', 'HEAT CALL'], ['no', 'BURNER SW'], ['temp', 'OPER 180°', true], ['temp', 'HI LIM MR', true], ['probe', 'LWCO'], ['flow', 'FLOW SW'], ['rmT', '6']], { label: '3' });
-  s += `<text x="${RAIL_L + 20}" y="330" style="font:11px var(--mono);fill:#8fa1b3">operating and high limit open on temperature rise</text>`;
-  /* rung 4: lockout interlocks 6 to 7 */
-  s += rung(390, [['rmT', '6'], ['press', 'LGPS (MR)'], ['press', 'HGPS (MR)', true], ['press', 'AIR SW'], ['rmT', '7']], { from: 180, to: 780, label: '4' });
-  s += `<text x="180" y="430" style="font:11px var(--mono);fill:#8fa1b3">gas pressure switches are manual reset. 6 and 7 are inputs to the relay module.</text>`;
-  /* the relay module outputs */
-  s += `<rect x="${RAIL_L + 30}" y="470" width="150" height="440" rx="6" fill="none" stroke="#4aa3df" stroke-dasharray="6 4"/><text class="t" x="${RAIL_L + 40}" y="490">RELAY MODULE</text><text class="t" x="${RAIL_L + 40}" y="506">internal relays</text>`;
-  const outs = [[550, '3', 'coil', 'M1', '5'], [620, '10', 'xfmr', 'IGN XFMR', '6'], [690, '8', 'coil', 'PV', '7'], [760, '9', 'coil', 'V1', '8'], [870, '4', 'lamp', 'ALARM', '10']];
-  outs.forEach(o => { s += rung(o[0], [['no', ''], ['rmT', o[1]], ['wire', '', 120], [o[2], o[3]]], { label: o[4] }); });
-  s += `<path class="w" d="M520 760 V800 H${RAIL_R - 120}"/><circle cx="520" cy="760" r="4" fill="#b9c6d3"/>` + SYM.coil(RAIL_R - 120, 800, 'V2')[0] + `<path class="w" d="M${RAIL_R - 64} 800 H${RAIL_R}"/><text class="t" x="${RAIL_R + 14}" y="804">9</text>`;
-  s += rung(970, [['rmT', 'L1'], ['wire', 'RELAY MODULE POWER', 380], ['rmT', 'L2']], { label: '11' });
-  s += `<text x="${RAIL_L + 40}" y="530" style="font:11px var(--mono);fill:#8fa1b3">3: prepurge→postpurge · 10: pilot trial · 8: PFEP+MFEP · 9: MFEP+run · 4: lockout</text>`;
-  s += `<text x="${RAIL_L}" y="1040" style="font:12px var(--mono);fill:#8fa1b3">M1 = blower contactor. UV scanner wires to F and G on the subbase (1.25 V dc minimum at the amplifier test jacks).</text>`;
+  /* rung 1: burner switch to TB4, with its light */
+  s += rung(130, [['no', 'BURNER SW'], ['wire', 'TB4', 420], ['lamp', 'ON']], { label: '1' });
+  /* rung 2: blocked air filter switch and light */
+  const t4 = 230;
+  s += `<path class="w" d="M${t4} 130 V390"/><circle cx="${t4}" cy="130" r="4" fill="#b9c6d3"/>`;
+  s += rung(200, [['press', 'BLOCKED FILTER'], ['lamp', 'CHANGE FILTER']], { from: t4, label: '2' });
+  /* rung 3: field enable, then the limit string to terminal 6 */
+  s += rung(290, [['no', 'EN'], ['temp', 'HL', true], ['temp', 'RWF', true], ['press', 'LGPS'], ['press', 'HGPS', true], ['flow', 'FS'], ['probe', 'LWCO'], ['nc', 'VF'], ['rmT', '6']], { from: t4, label: '3' });
+  s += `<path class="w" d="M${t4} 390 H${t4}"/>`;
+  s += `<text x="${t4 + 4}" y="334" style="font:11px var(--mono);fill:#8fa1b3">EN field enable TB4-5 · HL high limit L4008E · RWF RWF55 Q13-14</text><text x="${t4 + 4}" y="350" style="font:11px var(--mono);fill:#8fa1b3">LGPS/HGPS gas switches (manual reset, no lockout) · FS flow · VF vestibule fuse</text>`;
+  /* rung 4: combustion airflow switch 6 to 7 */
+  s += rung(390, [['rmT', '6'], ['press', 'COMB. AIRFLOW'], ['rmT', '7']], { from: 300, to: 620, label: '4' });
+  s += `<text x="300" y="430" style="font:11px var(--mono);fill:#8fa1b3">TB6 → airflow switch → TB7: the RM7896D lockout interlock</text>`;
+  /* relay module outputs */
+  s += `<rect x="${RAIL_L + 30}" y="460" width="150" height="460" rx="6" fill="none" stroke="#4aa3df" stroke-dasharray="6 4"/><text class="t" x="${RAIL_L + 40}" y="480">RM7896D</text><text class="t" x="${RAIL_L + 40}" y="496">power on 5</text>`;
+  const outs = [[540, '4', 'coil', 'CRA1', '5', 'TB11'], [610, '8', 'coil', 'PILOT', '6', 'TB8'], [680, '9', 'coil', 'SKP75', '7', 'TB9'], [860, '10', 'xfmr', 'IGN XFMR', '10', 'TB10'], [920, '3', 'lamp', 'ALARM', '11', '']];
+  outs.forEach(o => { s += rung(o[0], [['no', ''], ['rmT', o[1]], ['wire', o[5], 120], [o[2], o[3]]], { label: o[4] }); });
+  /* TB9 also feeds the secondary valve, vent valve and TD-1 (which releases modulation through CRA2 after 20 s) */
+  const bx = 520;
+  s += `<path class="w" d="M${bx} 680 V800"/><circle cx="${bx}" cy="680" r="4" fill="#b9c6d3"/>`;
+  [[720, 'coil', 'SEC'], [760, 'coil', 'VENT']].forEach(b => { s += `<path class="w" d="M${bx} ${b[0]} H${RAIL_R - 120}"/>` + SYM[b[1]](RAIL_R - 120, b[0], b[2])[0] + `<path class="w" d="M${RAIL_R - 64} ${b[0]} H${RAIL_R}"/>`; });
+  s += `<path class="w" d="M${bx} 800 H560"/>` + SYM.rmT(560, 800, 'TD')[0] + `<path class="w" d="M590 800 H610"/>` + SYM.no(610, 800, '20 s')[0] + `<path class="w" d="M654 800 H${RAIL_R - 120}"/><text x="670" y="792">TB12</text>` + SYM.coil(RAIL_R - 120, 800, 'CRA2')[0] + `<path class="w" d="M${RAIL_R - 64} 800 H${RAIL_R}"/>`;
+  [[720, '8'], [760, '8'], [800, '9']].forEach(l => { s += `<text class="t" x="${RAIL_R + 14}" y="${l[0] + 4}">${l[1]}</text>`; });
+  /* rung 12: system pump (by others) from TB3 through its overload */
+  s += rung(980, [['nc', 'OL 95-96'], ['coil', 'PS']], { label: '12' }) + `<text x="${RAIL_L + 300}" y="1010" style="font:11px var(--mono);fill:#8fa1b3">PS = system pump starter (by others), runs continuously</text>`;
+  s += `<text x="${RAIL_L + 40}" y="516" style="font:11px var(--mono);fill:#8fa1b3">4: purge→postpurge · 8: pilot trial + MFEP · 10: first 5 s of pilot trial · 9: MFEP + run · 3: lockout</text>`;
+  s += `<text x="${RAIL_L}" y="1058" style="font:12px var(--mono);fill:#8fa1b3">SEC = secondary gas valve · VENT = normally open vent valve · TD = time delay TD-1</text>`;
+  s += `<text x="${RAIL_L}" y="1040" style="font:12px var(--mono);fill:#8fa1b3">UV scanner on F (R7849A amplifier: 1.5–5.0 V dc normal at the test jacks). Based on EVA manual Figure 9c.</text>`;
   return s + '</g>';
 }
 
@@ -1218,14 +1338,14 @@ function buildLadder() {
 /* ===== Boiler room picture: piping, pump, gas train, burner and stack. Click a part to look at it closely. ===== */
 const PIC_W = 1100, PIC_H = 760;
 const SPOTS = {
-  burner: [250, 470, 'Burner'], blower: [215, 420, 'Blower'], damper: [205, 515, 'Air damper'], aps: [262, 372, 'Air switch'],
+  burner: [250, 470, 'Burner'], blower: [215, 420, 'Blower'], filter: [205, 515, 'Air filter'], aps: [262, 372, 'Combustion airflow switch'], vfd: [80, 250, 'VFD'],
   sight: [312, 470, 'Sight glass'], scanner: [300, 430, 'UV scanner'], electrode: [292, 512, 'Ignition electrode'], ignx: [228, 560, 'Ignition xfmr'],
-  gascock: [42, 652, 'Main gas cock'], reg: [92, 652, 'Gas regulator'], lgps: [140, 612, 'Low gas sw.'], v1: [178, 652, 'Main valve V1'], v2: [220, 652, 'Main valve V2'],
-  hgps: [258, 612, 'High gas sw.'], pilotcock: [128, 576, 'Pilot cock'], pv: [176, 576, 'Pilot valve'],
-  stack: [725, 210, 'Stack / analyzer port'], tubes: [560, 470, 'Fire tubes'], gauge: [420, 270, 'P/T gauge'], relief: [520, 262, 'Relief valve'],
-  lwco: [790, 400, 'Low-water cutoff'], fs: [850, 126, 'Flow switch'], vent: [960, 92, 'Air vent'], exptank: [960, 300, 'Expansion tank'],
-  fill: [1044, 212, 'Make-up water'], pump: [900, 612, 'Pump'], coupler: [930, 642, 'Pump coupler'], iso: [1010, 612, 'Isolation valves'], strainer: [968, 650, 'Strainer'],
-  rm: [118, 186, 'Control cabinet'], alarm: [118, 104, 'Alarm light'], jumper: [150, 250, 'Cabinet terminals']
+  gascock: [42, 652, 'Manual gas valves'], lgps: [140, 612, 'Low gas sw.'], v1: [178, 652, 'SKP75 main valve'], vent: [199, 690, 'Vent valve'], v2: [220, 652, 'Secondary valve'],
+  hgps: [258, 612, 'High gas sw.'], pilotcock: [128, 576, 'Pilot cock'], pv: [176, 576, 'Pilot valve V4046'],
+  stack: [725, 210, 'Stack / analyzer port'], tubes: [560, 470, 'Heat exchanger'], gauge: [420, 270, 'P/T gauge'], relief: [520, 262, 'Relief valve'],
+  lwco: [790, 400, 'Low-water cutoff'], fs: [850, 126, 'Flow switch FS4-3'], vent2: [960, 92, 'Air vent'], exptank: [960, 300, 'Expansion tank'],
+  fill: [1044, 212, 'Make-up water'], pump: [900, 612, 'System pump'], coupler: [930, 642, 'Pump coupler'], iso: [1010, 612, 'Isolation valves'], strainer: [968, 650, 'Strainer'],
+  rm: [118, 186, 'Control panel'], alarm: [118, 104, 'Alarm light'], jumper: [150, 250, 'Cabinet terminals']
 };
 function buildPic() {
   let s = `<defs><linearGradient id="gJk" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#9b2d22"/><stop offset="1" stop-color="#5e1a14"/></linearGradient>
@@ -1238,7 +1358,7 @@ function buildPic() {
   s += `<rect x="700" y="40" width="50" height="270" fill="#6b7682" stroke="#4a545e"/><circle cx="725" cy="210" r="6" fill="#222"/><text class="pl" x="760" y="60">Flue</text>`;
   /* boiler shell */
   s += `<rect x="330" y="300" width="440" height="340" rx="22" fill="url(#gJk)" stroke="#3a0f0b" stroke-width="3"/><rect x="350" y="320" width="400" height="300" rx="14" fill="none" stroke="#c2513f" stroke-opacity=".35"/>`;
-  s += `<text class="sl" x="590" y="420" text-anchor="middle">HOT WATER BOILER · 1,000 MBH</text>`;
+  s += `<text class="sl" x="590" y="420" text-anchor="middle">THERMAL SOLUTIONS EVA-3000 · 3,000 MBH</text>`;
   s += `<path d="M380 640 v40 M720 640 v40" stroke="#2b333c" stroke-width="16"/><rect x="360" y="680" width="380" height="20" fill="#2b333c"/>`;
   /* supply: up from the boiler, across the top to the building */
   s += `<path d="M460 300 V120 H1100" stroke="url(#gPipe)" stroke-width="22" fill="none"/><path id="supFlow" d="M460 300 V120 H1100" stroke="#e86b4a" stroke-width="3" fill="none" stroke-dasharray="8 20" opacity="0"/>`;
@@ -1320,26 +1440,28 @@ function sheet(html) { $('sheet').className = 'sheet'; $('sheet').innerHTML = ht
 const closeSheet = () => { $('modal').hidden = true; };
 
 /* ---------- normal readings and specs ---------- */
-const GUIDE = [['Any two legs (L1-L2, L2-L3, L3-L1)', '≈ 208 V'], ['Any leg to ground', '≈ 120 V'], ['Control transformer X1 to X2', '≈ 120 V'], ['Across a closed switch, power on', '0 V'], ['Across an open switch in a live string', '≈ 120 V'],
-  ['Flame signal, pilot', '2.0 – 3.0 V dc'], ['Flame signal, main', '3.5 – 4.5 V dc'], ['Minimum to prove flame', '1.25 V dc'],
-  ['Gas inlet, natural gas', '6.5 – 7.5 in. w.c.'], ['Manifold, full fire', '3.5 in. w.c.'], ['Blower static at the air switch', '≈ 1.4 in. w.c.'],
-  ['Boiler pressure, cold / at 180°F', '12 / about 20 psi'], ['Pump differential', '≈ 9.4 psi'], ['Pump motor current, each leg', '≈ 3.3 A'], ['Blower motor current, each leg', '≈ 2.6 A']];
+const GUIDE = [['Any two legs (L1-L2, L2-L3, L3-L1)', '≈ 208 V'], ['Any leg to ground', '≈ 120 V'], ['Control transformer X1 to X2 (TB1 to TB2)', '≈ 115 V'],
+  ['Across a closed switch, power on', '0 V'], ['Across an open switch in a live string', '≈ 115 V'],
+  ['Flame signal, pilot and main (UV)', '1.5 – 5.0 V dc'], ['Minimum to prove flame (RM7896)', '1.25 V dc'],
+  ['Gas inlet (natural gas)', '6.0 in. w.c. min, 5 psi max'], ['Combustion air at the airflow switch, low / high fire', '≈ 0.4 / 2.0 in. w.c.'],
+  ['Boiler pressure, cold / at 180°F', '15 / about 23 psi'], ['System pump differential', '≈ 18 psi'], ['System pump current, each leg', '≈ 13.6 A'], ['Blower (VFD output), high fire', '≈ 6.6 A']];
 function buildSpecs() {
   const t = (h, rows) => `<h3>${h}</h3><table><tr><th>Item</th><th>Value</th></tr>` + rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('') + '</table>';
-  return t('Electrical', [['Supply', '208 V, 3 phase, 60 Hz (120 V leg to ground)'], ['Circulating pump', 'runs continuously whenever the boiler has power'], ['Heating call (building controls)', 'enables the burner only'], ['Disconnect fuses F1–F3', '15 A'], ['Control transformer', '208 V primary (L1-L2), 120 V secondary, X2 grounded'], ['Control fuse FU4', '3 A'], ['Burner blower motor', '3/4 hp, 2.6 A per leg running'], ['Circulating pump motor', '1 hp, 3.3 A per leg running'], ['Pump overload', 'manual reset, set 3.6 A'], ['Locked rotor (motor humming)', 'about 14–17 A'], ['Ignition transformer', '120 V primary, about 1.3 A'], ['Contactor coils and valve coils', '120 V']]) +
-    t('Flame safeguard sequence (this game runs it at 2× speed)', [['Initiate after power-up', '10 s'], ['Prepurge (blower on, airflow proven within 10 s)', '30 s'], ['Pilot flame establishing period, PFEP (ignition + pilot)', '10 s'], ['Main flame establishing period, MFEP (pilot + main)', '10 s'], ['Run (main valves only, interrupted pilot)', 'until the limits open'], ['Postpurge', '15 s'], ['Flame signal to prove flame', '1.25 V dc minimum'], ['Normal flame signal, pilot / main', '2 – 3 / 3.5 – 4.5 V dc']]) +
-    t('Gas train (natural gas)', [['Inlet pressure', '7 in. w.c. (6.5 firing)'], ['Manifold pressure, full fire', '3.5 in. w.c.'], ['Pilot pressure', '3.0 in. w.c.'], ['Low gas pressure switch (manual reset)', 'opens below 3.5 in. w.c.'], ['High gas pressure switch (manual reset)', 'opens above 5.0 in. w.c.'], ['Air proving switch', 'closes at 0.5 in. w.c.'], ['Blower static at the switch port', 'about 1.4 in. w.c.']]) +
-    t('Combustion (flue gas at the stack)', [['O2', '3 – 6 %'], ['CO2', '8.5 – 10 %'], ['CO, as measured', 'under 100 ppm'], ['Stack temperature', '380 – 450°F'], ['Combustion efficiency', 'about 82 %']]) +
-    t('Water side', [['Operating aquastat', 'opens 180°F, closes 165°F'], ['High limit (manual reset)', '210°F'], ['Cold fill pressure', '12 psi'], ['Pressure at 180°F', 'about 20 psi'], ['Relief valve', '30 psi'], ['Design flow / ΔT', '80 gpm / about 20°F at full load'], ['Pump differential', 'about 9.4 psi'], ['Flow switch', 'closes at about 20 gpm']]) +
-    `<p>Values not taken from a specific manufacturer's literature are typical for a 1,000 MBH commercial hot-water boiler with an on/off power burner. Confirm against the equipment on your site.</p>`;
+  return t('Electrical (EVA-3000, 208/60/3)', [['Supply', '208 V, 3 phase, 60 Hz (120 V leg to ground)'], ['Nominal power draw', '7.4 A'], ['Combustion blower', '2 hp, 3 phase, on a variable frequency drive'], ['Control transformer', '208 V tap to 115 V, two primary fuses FU1, X2 grounded'], ['Control circuit breaker', '115 V, trips at about 5 A'], ['Flame safeguard', 'Honeywell RM7896D, 30 s purge card, R7849A UV amplifier'], ['Operating limit', 'Siemens RWF55, factory setpoint 180°F'], ['High limit', 'Honeywell L4008E, manual reset, set 210°F (max 240°F)'], ['System pump (by others)', '5 hp, 208 V 3 phase, runs continuously from TB3'], ['Do not connect low-voltage controls directly', 'use isolating relays (manual, Electrical section)']]) +
+    t('Sequence of operation (manual section VI; this game runs it at 2× speed)', [['Standby', 'limits closed, no flame signal, airflow switch open'], ['Call for heat', 'terminal 6 powered; terminal 4 starts the blower (CRA1 → VFD)'], ['Combustion airflow switch makes', 'must prove within 10 s'], ['Prepurge', '30 s'], ['Pilot trial (PFEP)', 'pilot valve + ignition; ignition off after 5 s (early spark termination)'], ['Pilot proven', 'flame signal above 1.5 V dc'], ['Main flame (MFEP)', 'main valves (terminal 9) open, pilot stays on 5 s'], ['Run', 'pilot off; TD-1 releases modulation 20 s after terminal 9 (CRA2)'], ['Postpurge', 'fan runs 60 s after the main valves close']]) +
+    t('Gas train (DB&B, figure 22e)', [['Inlet pressure', '6.0 in. w.c. minimum, 5 psi maximum (natural gas)'], ['Order', 'manual valve (pilot tapping) → low gas switch → SKP75 main valve → vent valve → secondary valve → high gas switch → manual valve → burner'], ['Low gas pressure switch', 'manual reset, set 5.0 in. w.c. (assumed)'], ['High gas pressure switch', 'manual reset, set 3.0 in. w.c. downstream (assumed)'], ['Main valve pressure, low / high fire', 'about 0.4 / 2.0 in. w.c. (match the firetest label)'], ['Pilot', 'V4046 solenoid, pilot regulator, about 3.0 in. w.c.'], ['Gas connection', '2 in. NPT']]) +
+    t('Combustion (flue gas at the stack)', [['O2', 'about 4.5 – 5.5 % (match the firetest report)'], ['CO', 'keep well under 400 ppm (manual limit)'], ['Stack temperature', 'about 250 – 320°F'], ['Efficiency', 'about 87 % (2,610 MBH out / 3,000 in)'], ['Burner element', 'evenly orange, no flicker']]) +
+    t('Water side (EVA-3000)', [['Input / gross output / net AHRI', '3,000 / 2,610 / 2,270 MBH'], ['Water volume', '43.1 gal'], ['Flow, 20°F ΔT / 40°F ΔT', '261 gpm (4.41 ft) / 131 gpm (1.73 ft)'], ['Minimum / maximum flow', '131 / 261 gpm'], ['Supply / return pipe', '4 in.'], ['Flow switch FS4-3', 'makes at about 110 gpm (assumed)'], ['RWF55 burner on / off', '175°F / 185°F (assumed switching points)'], ['Max allowable working pressure', '160 psi'], ['Relief valve', 'set at time of purchase (50 psi assumed)'], ['Cold fill / at 180°F', '15 / about 23 psi']]) +
+    `<p>From the Thermal Solutions EVA I&O manual 81456001 R12-6/16 (EVA-3000 data, Figure 9c wiring). Items marked assumed are not in the manual; confirm against your boiler's rating label and firetest report.</p>`;
 }
 function buildPlate() {
-  return `<div class="plate"><h3>Hot water boiler</h3><div class="plm">Model HWB-1000 · Serial 24B-1187</div>
-    <div class="plr">Input: 1,000,000 Btu/h natural gas</div><div class="plr">Gross output: 820,000 Btu/h</div>
-    <div class="plr">Max. allowable working pressure: 80 psi water</div><div class="plr">Relief valve setting: 30 psi</div>
-    <div class="plr">Max. water temperature: 250°F</div><div class="plr">Manifold pressure: 3.5 in. w.c. · Min. inlet: 5.0 in. w.c.</div>
-    <div class="plr">Electrical: 208 V, 3 ph, 60 Hz · Burner motor 2.9 FLA</div><div class="plr">Control circuit: 120 V</div></div>
-    <div class="plate"><h3>Circulating pump</h3><div class="plm">In-line, close-coupled</div><div class="plr">80 gpm at 22 ft head</div><div class="plr">1 hp · 208 V · 3 ph · 3.6 FLA</div></div>`;
+  return `<div class="plate"><h3>Thermal Solutions</h3><div class="plm">Model EVA3000BN1-UEBM · Serial 65055391</div>
+    <div class="plr">Input: 3,000,000 Btu/h natural gas</div><div class="plr">Gross output: 2,610 MBH · Net AHRI: 2,270 MBH</div>
+    <div class="plr">Max. allowable working pressure: 160 psi water</div><div class="plr">Relief valve setting: 50 psi</div>
+    <div class="plr">Water volume: 43.1 gal</div><div class="plr">Gas inlet: 6.0 in. w.c. min · 5 psi max</div>
+    <div class="plr">Electrical: 208 V, 3 ph, 60 Hz · 7.4 A · blower 2 hp</div><div class="plr">Control circuit: 115 V</div>
+    <div class="dim">Relief setting is chosen when the boiler is ordered; 50 psi is assumed here.</div></div>
+    <div class="plate"><h3>System pump (by others)</h3><div class="plm">In-line, close-coupled</div><div class="plr">200 gpm at 41 ft head</div><div class="plr">5 hp · 208 V · 3 ph · 15.2 FLA</div></div>`;
 }
 
 /* ---------- screens ---------- */
@@ -1369,8 +1491,10 @@ function updateStatus() {
   const noise = B.main && B.lowWater() ? 'Banging and kettling in the boiler' : B.has('air_bound') && B.pumpRun ? 'Gurgling in the pipes' : '';
   $('status').innerHTML =
     row('Sight glass', FLAME_TXT[s.flame], s.flame === 'main' ? 'ok' : s.flame === 'none' ? '' : 'warn') +
-    row('Burner blower', s.blower === 'run' ? 'Running' : s.blower === 'hum' ? 'Humming, not turning' : 'Stopped', s.blower === 'hum' ? 'bad' : '') +
-    row('Pump', s.pump === 'run' ? 'Running' : s.pump === 'hum' ? 'Humming, not turning' : 'Stopped', s.pump === 'hum' ? 'bad' : '') +
+    row('Burner blower', s.blower === 'run' ? 'Running' : 'Stopped') +
+    row('System pump', s.pump === 'run' ? 'Running' : s.pump === 'hum' ? 'Humming, not turning' : 'Stopped', s.pump === 'hum' ? 'bad' : '') +
+    row('Burner switch light', s.burnerLamp ? 'ON' : 'off') +
+    row('CHANGE FILTER light', s.filterLamp ? 'ON' : 'off', s.filterLamp ? 'warn' : '') +
     row('Alarm light', s.alarm ? 'ON' : 'off', s.alarm ? 'bad' : '') +
     row('LOW WATER light', s.lwLamp ? 'ON' : 'off', s.lwLamp ? 'warn' : '') +
     row('Boiler gauge', Math.round(s.Tb) + '°F · ' + s.P.toFixed(0) + ' psi') +
@@ -1399,9 +1523,9 @@ function updateStatus() {
   setSwitches();
 }
 
-/* contactors pull in, LEDs and lamps on the panel follow the boiler */
+/* contactors and relays pull in; displays, LEDs and lamps on the panel follow the boiler */
 function syncPanel(s, pow) {
-  const st = { m1: !!B.en.m1, ps: !!B.en.ps }, NAME = { m1: 'M1', ps: 'PUMP' };
+  const st = { ps: !!B.en.ps, cra1: !!B.en.cra1, cra2: !!B.en.cra2 }, NAME = { ps: 'PUMP' };
   document.querySelectorAll('#unitSvg [data-k]').forEach(el => {
     const k = el.dataset.k, on = !!st[k], c = el.classList;
     if (c.contains('armg') || c.contains('armp')) {
@@ -1409,13 +1533,24 @@ function syncPanel(s, pow) {
       if (was !== el.dataset.on) el.style.transition = on ? 'transform .09s cubic-bezier(.6,0,1,.55)' : 'transform .22s cubic-bezier(.2,1.35,.5,1)';
       el.style.transform = c.contains('armg') ? (on ? 'translateY(0)' : 'translateY(-26px)') : (on ? 'translateX(0)' : 'translateX(-7px)');
     } else if (c.contains('coilglow')) el.setAttribute('opacity', on ? 0.45 : 0);
+    else if (c.contains('rblade')) el.style.transform = on ? 'rotate(' + el.dataset.rot + 'deg)' : 'none';
     else if (c.contains('kled')) el.setAttribute('fill', on ? '#38e08a' : '#55616d');
-    else if (c.contains('kbadge')) el.textContent = NAME[k] + (on ? ' CLOSED' : ' OPEN');
+    else if (c.contains('kbadge')) el.textContent = (NAME[k] || k.toUpperCase()) + (on ? ' CLOSED' : ' OPEN');
   });
   const led = { POWER: pow, PILOT: pow && B.out(8), FLAME: pow && B.sig >= FLAME_MIN, MAIN: pow && B.out(9), ALARM: pow && B.rm.st === 'LOCKOUT' };
   document.querySelectorAll('#unitSvg .pled').forEach(el => { const k = el.dataset.led; el.setAttribute('fill', led[k] ? (k === 'ALARM' ? '#ff3b2e' : '#38e08a') : '#3b4652'); });
-  const lw = $('pnlLwLamp'); if (lw) lw.setAttribute('fill', s.lwLamp ? '#ffb020' : '#3a2a1a');
-  [['pnlV1', B.en.v1], ['pnlV2', B.en.v2]].forEach(v => { const e = $(v[0]); if (e) { e.textContent = v[1] ? 'OPEN' : 'CLOSED'; e.style.fill = v[1] ? '#38e08a' : '#e5483b'; } });
+  const set = (id, a, v) => { const e = $(id); if (e) e.setAttribute(a, v); }, txt = (id, v, col) => { const e = $(id); if (e) { e.textContent = v; if (col) e.style.fill = col; } };
+  set('pnlLwLamp', 'fill', s.lwLamp ? '#ffb020' : '#3a2a1a');
+  set('pnlBsLamp', 'fill', s.burnerLamp ? '#f5c400' : '#3b4652');
+  set('pnlFltLamp', 'fill', s.filterLamp ? '#ffb020' : '#3b4652');
+  set('pnlTdLed', 'fill', B.en.td ? '#38e08a' : '#3b4652');
+  txt('pnlV1', B.en.v1 ? 'OPEN' : 'CLOSED', B.en.v1 ? '#38e08a' : '#e5483b');
+  txt('pnlV2', B.en.v2 ? 'OPEN' : 'CLOSED', B.en.v2 ? '#38e08a' : '#e5483b');
+  txt('pnlVfd', s.vfd, B.vfdFault ? '#ff8a80' : '#7fd7ff');
+  const ctl = B.mag('TB3') > 90 && !B.has('rwf_bad');
+  txt('pnlRwfPV', ctl ? (B.has('rwf_sensor') ? 'OPEN' : String(Math.round(B.rwfT()))) : '');
+  txt('pnlRwfSP', ctl ? String(RWF_SP) : '');
+  set('pnlRwfLed', 'fill', ctl && B.ocClosed() ? '#38e08a' : '#3b4652');
 }
 
 /* ---------- meter ---------- */
@@ -1523,12 +1658,13 @@ function installPart(k) {
   if (!p.live && B.disc) return strike('You started work on the boiler with the disconnect closed. 120 V was live in the cabinet and the burner could start.');
   partsUsed++;
   if (p.reset) {
-    const was = p.reset === 'hl' ? B.hlTrip : p.reset === 'lg' ? B.lgTrip : p.reset === 'ol' ? B.olTrip : B.hgTrip;
+    const was = p.reset === 'hl' ? B.hlTrip : p.reset === 'lg' ? B.lgTrip : p.reset === 'ol' ? B.olTrip : p.reset === 'vfd' ? !!B.vfdFault : B.hgTrip;
     if (!was) { wrongParts++; log(p.name + ': it was not tripped.', 's'); return; }
     if (p.reset === 'hl') { if (B.Tb > HL_SET - 15) { partsUsed--; log('The high limit will not reset yet. The water is still ' + Math.round(B.Tb) + '°F. Let it cool below ' + (HL_SET - 15) + '°F.', 'h'); return; } B.hlTrip = false; }
     if (p.reset === 'lg') { B.lgTrip = false; B.tick(0.01); if (B.lgTrip) { log('Low gas pressure switch reset. It popped right back out: the gas pressure at the switch is still too low.', 's'); return; } }
     if (p.reset === 'hg') B.hgTrip = false;
     if (p.reset === 'ol') { B.olTrip = false; B.humT = 0; }
+    if (p.reset === 'vfd') B.vfdFault = '';
     B.resetsSinceFix = 0; log(p.name.replace('Press', 'Pressed') + '. It latched in.', 'g'); updateStatus(); return;
   }
   const cured = [...B.faults].filter(f => FIXES[f] === k);
@@ -1557,7 +1693,7 @@ function startLevel(i) {
   sheet(`<div class="kick">Level ${l.n} · ${esc(l.rank)}</div><h3>${esc(l.title)}</h3><p style="color:var(--dim)">${esc(l.site)}</p><p>${esc(l.ticket)}</p>
     <p style="color:var(--dim);font-size:13px">Tools: multimeter (AC volts, ohms, DC volts for the flame signal), clamp meter, manometer, pump gauges, pipe thermometers and a combustion analyzer. Open the disconnect before any ohm reading or repair.</p>
     <div class="row"><button class="btn" id="custBtn0" type="button">Talk to the customer first</button><button class="btn go" id="goBtn" type="button">Start job</button></div>`);
-  $('goBtn').onclick = () => { closeSheet(); active = true; t0 = Date.now(); log('On site. The pump runs all the time, and the building controls are calling for heat.'); };
+  $('goBtn').onclick = () => { closeSheet(); active = true; t0 = Date.now(); log('On site at a Thermal Solutions EVA-3000. The system pump runs all the time, and the building is calling for heat.'); };
   $('custBtn0').onclick = () => { $('goBtn').onclick(); custSheet(); };
 }
 function endLevel(win, msg) {

@@ -21,7 +21,7 @@ window.onerror = function (msg, src, line) {
 </head>
 <body>
 <header>
-  <h1>Boiler Troubleshooting<small>Hot-water boiler · power burner · flame safeguard</small></h1>
+  <h1>Boiler Troubleshooting<small>Thermal Solutions EVA-3000 · modulating · RM7896D</small></h1>
   <div id="lvlTabs" role="tablist" aria-label="Levels"></div>
   <button class="btn" id="viewBtn" type="button" title="Switch between the desktop, phone and smartboard layouts">View: Desktop</button>
   <span id="bzBox"><button class="btn" id="bzDn" type="button" title="Make everything smaller">Size −</button><button class="btn" id="bzUp" type="button" title="Make everything bigger">Size +</button></span>
@@ -42,12 +42,12 @@ window.onerror = function (msg, src, line) {
     </div>
     <div class="view" id="viewUnit">
       <div class="unitnav" id="unitNav"></div>
-      <div class="scroll" id="unitScroll"><svg id="unitSvg" class="nowires" viewBox="0 0 1120 2110" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Boiler control panel with probe points"></svg></div>
-      <div class="legend"><span><i style="background:var(--red)"></i>Red probe</span><span><i style="background:#fff"></i>Black probe</span><span><i style="background:#e8a33b"></i>Leg L1</span><span><i style="background:#b48cff"></i>Leg L2</span><span><i style="background:#4ac9c0"></i>Leg L3</span><span><i style="background:#e5483b"></i>120 V control hot</span><span><i style="background:#4aa3df"></i>Neutral (X2)</span><span>Click a terminal to probe.</span></div>
+      <div class="scroll" id="unitScroll"><svg id="unitSvg" class="nowires" viewBox="0 0 1120 2420" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Boiler control panel with probe points"></svg></div>
+      <div class="legend"><span><i style="background:var(--red)"></i>Red probe</span><span><i style="background:#fff"></i>Black probe</span><span><i style="background:#e8a33b"></i>Leg L1</span><span><i style="background:#b48cff"></i>Leg L2</span><span><i style="background:#4ac9c0"></i>Leg L3</span><span><i style="background:#e5483b"></i>115 V control hot</span><span><i style="background:#4aa3df"></i>Neutral (X2 / TB2)</span><span>Click a terminal to probe.</span></div>
     </div>
     <div class="view" id="viewSchem" hidden>
       <div class="scroll" style="flex:1;min-height:0;overflow:auto"><svg id="schemSvg" class="sch" viewBox="0 0 900 1390" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Ladder schematic of the boiler controls"></svg></div>
-      <div class="legend"><span>Top: 208 V 3-phase power. Below: 120 V control from the control transformer (left rail X1 after FU4, right rail X2). Numbers on the right are line numbers.</span></div>
+      <div class="legend"><span>Top: 208 V 3-phase power. Below: 115 V control (left rail TB3 after the breaker, right rail TB2). Follows EVA manual Figure 9c. Numbers on the right are line numbers.</span></div>
     </div>
     <div class="view" id="viewPic" hidden><div class="scroll"><svg id="picSvg" viewBox="0 0 1100 760" preserveAspectRatio="xMidYMin meet" role="img" aria-label="Boiler room with burner, gas train, pump and piping"></svg>
       <div id="picPanel"><div class="pc" id="picSel"><h3>Look closely</h3><p class="dim">Click any part of the boiler room to inspect it.</p></div></div></div></div>
@@ -65,7 +65,7 @@ window.onerror = function (msg, src, line) {
       <h2>Boiler controls</h2>
       <div class="tools">
         <button class="btn sw on" id="discBtn" type="button">Disconnect <em>ON</em></button>
-        <button class="btn sw on" id="callBtn" type="button">Heating call (burner enable) <em>ON</em></button>
+        <button class="btn sw on" id="callBtn" type="button">Field enable / heat call (TB4-5) <em>ON</em></button>
         <button class="btn sw on" id="bsBtn" type="button">Burner switch <em>ON</em></button>
         <button class="btn" id="custBtn" type="button">Talk to the customer</button>
       </div>
@@ -85,11 +85,11 @@ window.onerror = function (msg, src, line) {
     </div>
     <div class="card" id="cardClamp">
       <h2>Clamp meter &amp; gauges</h2>
-      <div class="row" style="margin-bottom:6px"><select id="clampSel" aria-label="Clamp location"><option value="pump1">Pump motor lead T1</option><option value="pump2">Pump motor lead T2</option><option value="pump3">Pump motor lead T3</option><option value="blower1">Blower motor lead T1</option><option value="blower2">Blower motor lead T2</option><option value="blower3">Blower motor lead T3</option><option value="ign">Ignition transformer lead</option><option value="x1">Control transformer X1</option><option value="line">Main line L1</option></select><button class="btn" id="clampBtn" type="button">Clamp</button></div>
+      <div class="row" style="margin-bottom:6px"><select id="clampSel" aria-label="Clamp location"><option value="pump1">System pump lead T1</option><option value="pump2">System pump lead T2</option><option value="pump3">System pump lead T3</option><option value="blower">Blower motor lead U (VFD output)</option><option value="vfdin">VFD input L1</option><option value="ign">Ignition transformer lead</option><option value="x1">Control transformer X1</option><option value="line">Main line L1</option></select><button class="btn" id="clampBtn" type="button">Clamp</button></div>
       <div class="row" style="margin-bottom:10px;font-family:var(--mono)">Amps: <b id="clampOut">---</b></div>
-      <div class="row" style="margin-bottom:6px"><select id="manoSel" aria-label="Manometer port"><option value="inlet">Manometer: gas inlet port</option><option value="manifold">Manometer: manifold port (after V2)</option><option value="pilot">Manometer: pilot test port</option><option value="air">Manometer: blower static (air switch port)</option></select><button class="btn" id="manoBtn" type="button">Read</button></div>
+      <div class="row" style="margin-bottom:6px"><select id="manoSel" aria-label="Manometer port"><option value="inlet">Manometer: gas inlet port</option><option value="manifold">Manometer: port after the main valves</option><option value="pilot">Manometer: pilot test port</option><option value="air">Manometer: combustion airflow switch port</option></select><button class="btn" id="manoBtn" type="button">Read</button></div>
       <div class="row" style="margin-bottom:10px;font-family:var(--mono)">Pressure: <b id="manoOut">---</b></div>
-      <div class="row" style="margin-bottom:6px"><select id="pgSel" aria-label="Pump gauge"><option value="dp">Pump suction and discharge gauges</option><option value="ret">Pipe thermometer: return water</option><option value="sup">Pipe thermometer: supply water</option></select><button class="btn" id="pgBtn" type="button">Read</button></div>
+      <div class="row" style="margin-bottom:6px"><select id="pgSel" aria-label="Pump gauge"><option value="dp">System pump suction and discharge gauges</option><option value="ret">Pipe thermometer: return water</option><option value="sup">Pipe thermometer: supply water</option></select><button class="btn" id="pgBtn" type="button">Read</button></div>
       <div class="row" style="margin-bottom:10px;font-family:var(--mono)"><b id="pgOut">---</b></div>
       <div class="row"><button class="btn" id="anaBtn" type="button">Combustion analyzer in the stack</button></div>
       <div id="anaOut" style="font-family:var(--mono);font-size:12.5px;margin-top:6px">---</div>

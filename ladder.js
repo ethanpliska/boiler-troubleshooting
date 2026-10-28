@@ -43,46 +43,57 @@ function powerLadder() {
   let s = `<text class="t" x="70" y="22">208 V 3 PHASE</text>`;
   const L = [100, 140, 180], BUS = [150, 170, 190], COL = ['#e8a33b', '#b48cff', '#4ac9c0'];
   L.forEach((x, i) => {
-    s += `<text x="${x}" y="44" text-anchor="middle">L${i + 1}</text><path class="w" d="M${x} 50 v8" style="stroke:${COL[i]}"/>` + VS.no(x, 58, i === 2 ? 'DISC' : '') + VS.fuse(x, 94, i === 2 ? 'F1-F3 15A' : '');
+    s += `<text x="${x}" y="44" text-anchor="middle">L${i + 1}</text><path class="w" d="M${x} 50 v8" style="stroke:${COL[i]}"/>` + VS.no(x, 58, i === 2 ? 'DISC (BY OTHERS)' : '') + VS.fuse(x, 94, i === 2 ? 'F1-F3' : '');
     s += `<path class="w" d="M${x} 142 V${BUS[i]} H700" style="stroke:${COL[i]}"/>`;
   });
   s += `<path class="w" d="M70 76 H200" style="stroke-dasharray:4 4"/>`;
-  /* blower: M1 contacts to the motor */
-  [310, 340, 370].forEach((x, i) => { s += `<circle cx="${x}" cy="${BUS[i]}" r="3.5" fill="#b9c6d3"/><path class="w" d="M${x} ${BUS[i]} V206"/>` + VS.no(x, 206, i === 2 ? 'M1' : '') + `<path class="w" d="M${x} 242 V262 L340 270"/>`; });
-  s += VS.motor(340, 296, 'BLOWER');
-  /* pump: starter contacts and overload heaters */
+  /* VFD to the 2 hp blower */
+  [300, 330, 360].forEach((x, i) => { s += `<circle cx="${x}" cy="${BUS[i]}" r="3.5" fill="#b9c6d3"/><path class="w" d="M${x} ${BUS[i]} V210"/>`; });
+  s += `<rect class="p" x="280" y="210" width="100" height="40" rx="4"/><text x="330" y="235" text-anchor="middle">VFD</text><text x="390" y="226">RUN: CRA1</text><text x="390" y="242">SPEED: RWF55</text>`;
+  s += `<path class="w" d="M300 250 V262 L330 270 M330 250 V270 M360 250 V262 L330 270"/>` + VS.motor(330, 296, 'BLOWER 2 HP');
+  /* system pump starter (by others) */
   [490, 520, 550].forEach((x, i) => { s += `<circle cx="${x}" cy="${BUS[i]}" r="3.5" fill="#b9c6d3"/><path class="w" d="M${x} ${BUS[i]} V206"/>` + VS.no(x, 206, i === 2 ? 'PS' : '') + VS.ol(x, 242) + `<path class="w" d="M${x} 270 V272 L520 276"/>`; });
-  s += `<text x="566" y="262">OL</text>` + VS.motor(520, 300, 'PUMP');
-  /* control transformer on L1-L2 */
-  s += `<path class="w" d="M640 150 V214 M670 170 V214"/><circle cx="640" cy="150" r="3.5" fill="#b9c6d3"/><circle cx="670" cy="170" r="3.5" fill="#b9c6d3"/>`;
-  s += `<path class="w" d="M630 214 h50 M640 214 q-2 8 0 8 M640 216 q8 4 0 8 q8 4 0 8 q8 4 0 8 M670 216 q8 4 0 8 q8 4 0 8 q8 4 0 8 M630 246 h50 M630 250 h50"/>`;
-  s += `<text x="690" y="222">H1-H2 208 V</text><text x="690" y="262">X1-X2 120 V</text>`;
-  s += `<path class="w" d="M640 250 V362 H${RAIL_L - 40} V${330 + 60}"/><path class="w" d="M670 250 V276 H${RAIL_R} V${330 + 46}"/><text x="${RAIL_R - 40}" y="270">X2 (grounded)</text><text x="${RAIL_L - 36}" y="356">X1</text>`;
+  s += `<text x="566" y="262">OL</text>` + VS.motor(520, 300, 'SYSTEM PUMP');
+  /* control transformer through two primary fuses on L1-L2 */
+  s += `<path class="w" d="M640 150 V170 M670 170 V170"/><circle cx="640" cy="150" r="3.5" fill="#b9c6d3"/><circle cx="670" cy="170" r="3.5" fill="#b9c6d3"/>`;
+  s += VS.fuse(640, 152, '') + VS.fuse(670, 172, 'FU1').replace('M670 172 v8', 'M670 172 v8');
+  s += `<path class="w" d="M640 200 V214 M670 220 V214 M630 214 h50 M640 216 q8 4 0 8 q8 4 0 8 q8 4 0 8 M670 216 q8 4 0 8 q8 4 0 8 q8 4 0 8 M630 246 h50 M630 250 h50"/>`;
+  s += `<text x="690" y="236">208 / 115 V</text>`;
+  s += `<path class="w" d="M640 250 V362 H${RAIL_L - 40} V${330 + 60}"/><path class="w" d="M670 250 V276 H${RAIL_R} V${330 + 46}"/><text x="${RAIL_R - 60}" y="270">X2 = TB2 (grounded)</text><text x="${RAIL_L - 36}" y="356">X1 = TB1</text>`;
   return s;
 }
 function buildLadder() {
   let s = powerLadder() + '<g transform="translate(0,330)">';
-  s += `<text class="t" x="${RAIL_L + 60}" y="22">120 V CONTROL (X1 after FU4)</text><text class="t" x="${RAIL_R - 6}" y="30">X2</text>`;
-  /* control fuse FU4 feeding the left rail */
-  s += SYM.fuse(RAIL_L - 40, 60, 'FU4 3A')[0] + `<path class="w" d="M${RAIL_L + 16} 60 h20 v20 H${RAIL_L} V1010"/>`;
+  s += `<text class="t" x="${RAIL_L + 60}" y="22">115 V CONTROL (TB3 after the 5 A breaker)</text><text class="t" x="${RAIL_R - 6}" y="30">TB2</text>`;
+  s += SYM.fuse(RAIL_L - 40, 60, 'CB 5A')[0] + `<path class="w" d="M${RAIL_L + 16} 60 h20 v20 H${RAIL_L} V1010"/><text x="${RAIL_L + 40}" y="96">TB3</text>`;
   s += `<path class="w" d="M${RAIL_R} 46 V1010"/>`;
-  /* rung 1: the pump runs whenever the boiler has power (continuous circulation), through its overload contact */
-  s += rung(130, [['nc', 'OL 95-96'], ['coil', 'PS']], { label: '1' });
-  s += `<text x="${RAIL_L + 20}" y="190" style="font:11px var(--mono);fill:#8fa1b3">PS = pump starter: runs continuously. OL opens on motor overload (manual reset).</text>`;
-  /* rung 3: from A through the limit string to terminal 6 */
-  /* rung 3: the heating call from the building enables the burner through the limit string to terminal 6 */
-  s += rung(290, [['no', 'HEAT CALL'], ['no', 'BURNER SW'], ['temp', 'OPER 180°', true], ['temp', 'HI LIM MR', true], ['probe', 'LWCO'], ['flow', 'FLOW SW'], ['rmT', '6']], { label: '3' });
-  s += `<text x="${RAIL_L + 20}" y="330" style="font:11px var(--mono);fill:#8fa1b3">operating and high limit open on temperature rise</text>`;
-  /* rung 4: lockout interlocks 6 to 7 */
-  s += rung(390, [['rmT', '6'], ['press', 'LGPS (MR)'], ['press', 'HGPS (MR)', true], ['press', 'AIR SW'], ['rmT', '7']], { from: 180, to: 780, label: '4' });
-  s += `<text x="180" y="430" style="font:11px var(--mono);fill:#8fa1b3">gas pressure switches are manual reset. 6 and 7 are inputs to the relay module.</text>`;
-  /* the relay module outputs */
-  s += `<rect x="${RAIL_L + 30}" y="470" width="150" height="440" rx="6" fill="none" stroke="#4aa3df" stroke-dasharray="6 4"/><text class="t" x="${RAIL_L + 40}" y="490">RELAY MODULE</text><text class="t" x="${RAIL_L + 40}" y="506">internal relays</text>`;
-  const outs = [[550, '3', 'coil', 'M1', '5'], [620, '10', 'xfmr', 'IGN XFMR', '6'], [690, '8', 'coil', 'PV', '7'], [760, '9', 'coil', 'V1', '8'], [870, '4', 'lamp', 'ALARM', '10']];
-  outs.forEach(o => { s += rung(o[0], [['no', ''], ['rmT', o[1]], ['wire', '', 120], [o[2], o[3]]], { label: o[4] }); });
-  s += `<path class="w" d="M520 760 V800 H${RAIL_R - 120}"/><circle cx="520" cy="760" r="4" fill="#b9c6d3"/>` + SYM.coil(RAIL_R - 120, 800, 'V2')[0] + `<path class="w" d="M${RAIL_R - 64} 800 H${RAIL_R}"/><text class="t" x="${RAIL_R + 14}" y="804">9</text>`;
-  s += rung(970, [['rmT', 'L1'], ['wire', 'RELAY MODULE POWER', 380], ['rmT', 'L2']], { label: '11' });
-  s += `<text x="${RAIL_L + 40}" y="530" style="font:11px var(--mono);fill:#8fa1b3">3: prepurge→postpurge · 10: pilot trial · 8: PFEP+MFEP · 9: MFEP+run · 4: lockout</text>`;
-  s += `<text x="${RAIL_L}" y="1040" style="font:12px var(--mono);fill:#8fa1b3">M1 = blower contactor. UV scanner wires to F and G on the subbase (1.25 V dc minimum at the amplifier test jacks).</text>`;
+  /* rung 1: burner switch to TB4, with its light */
+  s += rung(130, [['no', 'BURNER SW'], ['wire', 'TB4', 420], ['lamp', 'ON']], { label: '1' });
+  /* rung 2: blocked air filter switch and light */
+  const t4 = 230;
+  s += `<path class="w" d="M${t4} 130 V390"/><circle cx="${t4}" cy="130" r="4" fill="#b9c6d3"/>`;
+  s += rung(200, [['press', 'BLOCKED FILTER'], ['lamp', 'CHANGE FILTER']], { from: t4, label: '2' });
+  /* rung 3: field enable, then the limit string to terminal 6 */
+  s += rung(290, [['no', 'EN'], ['temp', 'HL', true], ['temp', 'RWF', true], ['press', 'LGPS'], ['press', 'HGPS', true], ['flow', 'FS'], ['probe', 'LWCO'], ['nc', 'VF'], ['rmT', '6']], { from: t4, label: '3' });
+  s += `<path class="w" d="M${t4} 390 H${t4}"/>`;
+  s += `<text x="${t4 + 4}" y="334" style="font:11px var(--mono);fill:#8fa1b3">EN field enable TB4-5 · HL high limit L4008E · RWF RWF55 Q13-14</text><text x="${t4 + 4}" y="350" style="font:11px var(--mono);fill:#8fa1b3">LGPS/HGPS gas switches (manual reset, no lockout) · FS flow · VF vestibule fuse</text>`;
+  /* rung 4: combustion airflow switch 6 to 7 */
+  s += rung(390, [['rmT', '6'], ['press', 'COMB. AIRFLOW'], ['rmT', '7']], { from: 300, to: 620, label: '4' });
+  s += `<text x="300" y="430" style="font:11px var(--mono);fill:#8fa1b3">TB6 → airflow switch → TB7: the RM7896D lockout interlock</text>`;
+  /* relay module outputs */
+  s += `<rect x="${RAIL_L + 30}" y="460" width="150" height="460" rx="6" fill="none" stroke="#4aa3df" stroke-dasharray="6 4"/><text class="t" x="${RAIL_L + 40}" y="480">RM7896D</text><text class="t" x="${RAIL_L + 40}" y="496">power on 5</text>`;
+  const outs = [[540, '4', 'coil', 'CRA1', '5', 'TB11'], [610, '8', 'coil', 'PILOT', '6', 'TB8'], [680, '9', 'coil', 'SKP75', '7', 'TB9'], [860, '10', 'xfmr', 'IGN XFMR', '10', 'TB10'], [920, '3', 'lamp', 'ALARM', '11', '']];
+  outs.forEach(o => { s += rung(o[0], [['no', ''], ['rmT', o[1]], ['wire', o[5], 120], [o[2], o[3]]], { label: o[4] }); });
+  /* TB9 also feeds the secondary valve, vent valve and TD-1 (which releases modulation through CRA2 after 20 s) */
+  const bx = 520;
+  s += `<path class="w" d="M${bx} 680 V800"/><circle cx="${bx}" cy="680" r="4" fill="#b9c6d3"/>`;
+  [[720, 'coil', 'SEC'], [760, 'coil', 'VENT']].forEach(b => { s += `<path class="w" d="M${bx} ${b[0]} H${RAIL_R - 120}"/>` + SYM[b[1]](RAIL_R - 120, b[0], b[2])[0] + `<path class="w" d="M${RAIL_R - 64} ${b[0]} H${RAIL_R}"/>`; });
+  s += `<path class="w" d="M${bx} 800 H560"/>` + SYM.rmT(560, 800, 'TD')[0] + `<path class="w" d="M590 800 H610"/>` + SYM.no(610, 800, '20 s')[0] + `<path class="w" d="M654 800 H${RAIL_R - 120}"/><text x="670" y="792">TB12</text>` + SYM.coil(RAIL_R - 120, 800, 'CRA2')[0] + `<path class="w" d="M${RAIL_R - 64} 800 H${RAIL_R}"/>`;
+  [[720, '8'], [760, '8'], [800, '9']].forEach(l => { s += `<text class="t" x="${RAIL_R + 14}" y="${l[0] + 4}">${l[1]}</text>`; });
+  /* rung 12: system pump (by others) from TB3 through its overload */
+  s += rung(980, [['nc', 'OL 95-96'], ['coil', 'PS']], { label: '12' }) + `<text x="${RAIL_L + 300}" y="1010" style="font:11px var(--mono);fill:#8fa1b3">PS = system pump starter (by others), runs continuously</text>`;
+  s += `<text x="${RAIL_L + 40}" y="516" style="font:11px var(--mono);fill:#8fa1b3">4: purge→postpurge · 8: pilot trial + MFEP · 10: first 5 s of pilot trial · 9: MFEP + run · 3: lockout</text>`;
+  s += `<text x="${RAIL_L}" y="1058" style="font:12px var(--mono);fill:#8fa1b3">SEC = secondary gas valve · VENT = normally open vent valve · TD = time delay TD-1</text>`;
+  s += `<text x="${RAIL_L}" y="1040" style="font:12px var(--mono);fill:#8fa1b3">UV scanner on F (R7849A amplifier: 1.5–5.0 V dc normal at the test jacks). Based on EVA manual Figure 9c.</text>`;
   return s + '</g>';
 }

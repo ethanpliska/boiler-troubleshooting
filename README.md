@@ -1,7 +1,9 @@
 # Boiler Troubleshooting
 
-An offline training game for HVAC technicians: troubleshoot a commercial hot-water boiler with a power burner and a
-7800-series flame safeguard. The boiler runs on 208 V 3-phase with a 120 V control circuit. Twenty-two service calls cover electrical controls, the water side and combustion.
+An offline training game for HVAC technicians: troubleshoot a Thermal Solutions EVA-3000 hot-water boiler (3,000 MBH,
+modulating premix burner on a VFD, Honeywell RM7896D flame safeguard, Siemens RWF55 controller, 208 V 3-phase with a
+115 V control circuit), modelled on the manufacturer's I&O manual. Twenty-two service calls cover electrical controls,
+the water side and combustion.
 
 Play: open `index.html` (or `boiler-troubleshooting.html`, the same file) in any browser. No internet needed.
 
